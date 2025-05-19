@@ -1,3 +1,6 @@
+-- make the sign column big enough to show our multibuffer line numbers
+vim.opt.signcolumn = "auto:4"
+
 local multibuffer = require("multibuffer")
 multibuffer.setup({})
 
@@ -13,6 +16,6 @@ local function open_file(file)
 end
 
 local mbuf = multibuffer.create_multibuf()
-multibuffer.multibuf_add_buf(mbuf, { buf = open_file('a.txt'), start_row = 0, end_row = 0 })
+multibuffer.multibuf_add_buf(mbuf, { buf = open_file('a.txt'), start_row = 119, end_row = 119 })
 multibuffer.multibuf_add_buf(mbuf, { buf = open_file('b.txt'), start_row = 0, end_row = 0 })
 multibuffer.win_set_multibuf(0, mbuf)
