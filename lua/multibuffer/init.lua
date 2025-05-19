@@ -2,7 +2,6 @@
 --- @field buf integer
 --- @field source_extmark_id integer
 --- @field virt_name_extmark_id integer|nil
---- @field source_change_autocmd_id integer
 
 --- @class MultibufInfo
 --- @field bufs MultibufBufInfo[]
@@ -10,10 +9,24 @@
 --- @type MultibufInfo[]
 local multibufs = {}
 
+--- @class MultibufBufListener
+--- @field multibufs integer[]
+--- @field change_autocmd_id integer
+
+--- @type table<integer, MultibufBufListener>
+local buf_listeners = {}
+
 local M = {
 	user_opts = {
 	},
 }
+
+local function list_insert_unique(list, item)
+	for _, v in ipairs(list) do
+		if v == item then return end
+	end
+	table.insert(list, item)
+end
 
 local function clamp(num, min, max)
 	assert(type(num) == "number")
@@ -76,13 +89,17 @@ local function get_line_number_signs(line_num)
 	return result
 end
 
---- @param multibuf integer
-local function multibuf_buf_changed(multibuf, opts)
-	local buf = opts.buf
-	local extmark_id = opts.extmark_id
+local function multibuf_buf_changed(args)
+	local buf = args.buf
+	local listener_info = buf_listeners[buf]
+	if listener_info == nil then
+		return
+	end
 
-	-- TODO: don't reload whole multibuf just related buffers/extmarks
-	M.multibuf_reload(multibuf)
+	for _, multibuf in ipairs(listener_info.multibufs) do
+		-- TODO: don't reload whole multibuf just related buffers/extmarks
+		M.multibuf_reload(multibuf)
+	end
 end
 
 --- @return integer
@@ -152,19 +169,24 @@ function M.multibuf_add_bufs(multibuf, opts_list)
 			priority = 20000, -- ya i dunno
 		})
 
-		local autocmd_id = vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-			buffer = buf,
-			callback = function(args)
-				multibuf_buf_changed(multibuf, { extmark_id = source_extmark_id, buf = args.buf })
-			end,
-		})
+		if buf_listeners[buf] == nil then
+			local autocmd_id = vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+				buffer = buf,
+				callback = multibuf_buf_changed,
+			})
+			buf_listeners[buf] = {
+				change_autocmd_id = autocmd_id,
+				multibufs = { multibuf }
+			}
+		else
+			list_insert_unique(buf_listeners[buf].multibufs, multibuf)
+		end
 
 		--- @type MultibufBufInfo
 		local multibuf_buf_info = {
 			buf = buf,
 			source_extmark_id = source_extmark_id,
 			virt_name_extmark_id = nil,
-			source_change_autocmd_id = autocmd_id,
 		}
 		table.insert(multibuf_info.bufs, multibuf_buf_info)
 	end
@@ -181,12 +203,17 @@ function M.win_set_multibuf(window, multibuf)
 	vim.api.nvim_win_set_buf(window, multibuf)
 end
 
---- @param multibuf integer
---- @param opts vim.api.keyset.buf_delete
-function M.multibuf_delete(multibuf, opts)
-	assert(M.multibuf_is_valid(multibuf), "invalid multibuf")
-	vim.api.nvim_buf_delete(multibuf, opts)
-	multibufs[multibuf] = nil
+--- @param buf integer
+function M.multibuf__wipeout(buf)
+	if M.multibuf_is_valid(buf) then
+		multibufs[buf] = nil
+	end
+
+	local listener_info = buf_listeners[buf]
+	if listener_info ~= nil then
+		vim.api.nvim_del_autocmd(listener_info.change_autocmd_id)
+		listener_info[buf] = nil
+	end
 end
 
 function M.multibuf_reload(multibuf)
@@ -348,6 +375,14 @@ function M.setup(opts)
 		callback = function(args)
 			local buf = args.buf
 			M.multibuf_reload(buf)
+		end,
+	})
+
+	vim.api.nvim_create_autocmd("BufWipeout", {
+		pattern = "*",
+		callback = function(args)
+			local buf = args.buf
+			M.multibuf__wipeout(buf)
 		end,
 	})
 end
