@@ -2,6 +2,7 @@
 --- @field buf integer
 --- @field source_extmark_id integer
 --- @field virt_name_extmark_id integer|nil
+--- @field source_change_autocmd_id integer
 
 --- @class MultibufInfo
 --- @field internal_buf integer
@@ -79,6 +80,15 @@ local function get_line_number_signs(line_num)
 	return result
 end
 
+--- @param multibuf integer
+local function multibuf_buf_changed(multibuf, opts)
+	local buf = opts.buf
+	local extmark_id = opts.extmark_id
+
+	-- TODO: don't reload whole multibuf just related buffers/extmarks
+	M.multibuf_reload(multibuf)
+end
+
 --- @return integer
 function M.create_multibuf()
 	local new_multibuf_id = last_multibuf_id + 1
@@ -149,11 +159,19 @@ function M.multibuf_add_bufs(multibuf, opts_list)
 			priority = 20000, -- ya i dunno
 		})
 
+		local autocmd_id = vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+			buffer = buf,
+			callback = function(args)
+				multibuf_buf_changed(multibuf, { extmark_id = source_extmark_id, buf = args.buf })
+			end,
+		})
+
 		--- @type MultibufBufInfo
 		local multibuf_buf_info = {
 			buf = buf,
 			source_extmark_id = source_extmark_id,
 			virt_name_extmark_id = nil,
+			source_change_autocmd_id = autocmd_id,
 		}
 		table.insert(multibuf_info.bufs, multibuf_buf_info)
 	end
