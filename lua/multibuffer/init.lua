@@ -5,14 +5,10 @@
 --- @field source_change_autocmd_id integer
 
 --- @class MultibufInfo
---- @field internal_buf integer
 --- @field bufs MultibufBufInfo[]
 
 --- @type MultibufInfo[]
 local multibufs = {}
-
---- @type integer
-local last_multibuf_id = 0
 
 local M = {
 	user_opts = {
@@ -91,22 +87,19 @@ end
 
 --- @return integer
 function M.create_multibuf()
-	local new_multibuf_id = last_multibuf_id + 1
-	last_multibuf_id = new_multibuf_id
+	local new_multibuf_id = vim.api.nvim_create_buf(true, false)
 
 	--- @type MultibufInfo
 	local multibuf_info = {
-		internal_buf = vim.api.nvim_create_buf(true, false),
 		bufs = {},
 	}
-	assert(multibuf_info.internal_buf ~= 0, "failed to create internal buf for multibuf")
-	vim.api.nvim_buf_set_name(multibuf_info.internal_buf, "multibuffer://" .. new_multibuf_id)
-	-- vim.api.nvim_set_option_value("filetype", "multibuffer", { buf = multibuf_info.internal_buf })
-	vim.api.nvim_set_option_value("buftype", "acwrite", { buf = multibuf_info.internal_buf })
+	assert(new_multibuf_id ~= 0, "failed to create multibuf")
+	vim.api.nvim_buf_set_name(new_multibuf_id, "multibuffer://" .. new_multibuf_id)
+	vim.api.nvim_set_option_value("buftype", "acwrite", { buf = new_multibuf_id })
 	-- always have header line because we can't put virtual text above the first line in a buffer
 	local header = create_multibuf_header()
-	vim.api.nvim_buf_set_lines(multibuf_info.internal_buf, 0, #header, true, header)
-	vim.api.nvim_set_option_value("modified", false, { buf = multibuf_info.internal_buf })
+	vim.api.nvim_buf_set_lines(new_multibuf_id, 0, #header, true, header)
+	vim.api.nvim_set_option_value("modified", false, { buf = new_multibuf_id })
 	table.insert(multibufs, new_multibuf_id, multibuf_info)
 
 	return new_multibuf_id
@@ -137,7 +130,7 @@ function M.multibuf_add_bufs(multibuf, opts_list)
 
 	local multibuf_info = multibufs[multibuf]
 	assert(
-		not vim.api.nvim_get_option_value("modified", { buf = multibuf_info.internal_buf }),
+		not vim.api.nvim_get_option_value("modified", { buf = multibuf }),
 		"cannot add buf to modified multibuf"
 	)
 
@@ -185,47 +178,29 @@ end
 function M.win_set_multibuf(window, multibuf)
 	assert(vim.api.nvim_win_is_valid(window), "invalid window")
 	assert(M.multibuf_is_valid(multibuf), "invalid multibuf")
-	local multibuf_info = multibufs[multibuf]
-	vim.api.nvim_win_set_buf(window, multibuf_info.internal_buf)
+	vim.api.nvim_win_set_buf(window, multibuf)
 end
 
 --- @param multibuf integer
 --- @param opts vim.api.keyset.buf_delete
 function M.multibuf_delete(multibuf, opts)
 	assert(M.multibuf_is_valid(multibuf), "invalid multibuf")
-	local multibuf_info = multibufs[multibuf]
-	vim.api.nvim_buf_delete(multibuf_info.internal_buf, opts)
+	vim.api.nvim_buf_delete(multibuf, opts)
 	multibufs[multibuf] = nil
-end
-
-function M.multibuf__internal_buf(multibuf)
-	assert(M.multibuf_is_valid(multibuf), "invalid multibuf")
-	local multibuf_info = multibufs[multibuf]
-	return multibuf_info.internal_buf
-end
-
-function M.multibuf__from_internal_buf(bufnr)
-	for multibuf, info in ipairs(multibufs) do
-		if info.internal_buf == bufnr then
-			return multibuf
-		end
-	end
-
-	return nil
 end
 
 function M.multibuf_reload(multibuf)
 	assert(M.multibuf_is_valid(multibuf), "invalid multibuf")
 	local multibuf_info = multibufs[multibuf]
-	local win = get_buf_win(multibuf_info.internal_buf)
+	local win = get_buf_win(multibuf)
 	local cursor_pos
 	if win ~= nil then
 		cursor_pos = vim.api.nvim_win_get_cursor(win)
 	end
 
 	-- clearing whole buffer, not sure if this is necessary in all situations
-	vim.api.nvim_buf_set_lines(multibuf_info.internal_buf, 0, -1, true, {})
-	vim.fn.sign_unplace("", { buffer = multibuf_info.internal_buf })
+	vim.api.nvim_buf_set_lines(multibuf, 0, -1, true, {})
+	vim.fn.sign_unplace("", { buffer = multibuf })
 
 	local all_lines = create_multibuf_header()
 	local header_length = #all_lines
@@ -245,17 +220,17 @@ function M.multibuf_reload(multibuf)
 
 		table.insert(virt_name_indices, #all_lines)
 		vim.list_extend(all_lines, lines)
-		vim.api.nvim_buf_set_lines(multibuf_info.internal_buf, -2, -2, true, lines)
+		vim.api.nvim_buf_set_lines(multibuf, -2, -2, true, lines)
 	end
 
-	vim.api.nvim_buf_set_lines(multibuf_info.internal_buf, 0, #all_lines, true, all_lines)
+	vim.api.nvim_buf_set_lines(multibuf, 0, #all_lines, true, all_lines)
 
 	assert(#multibuf_info.bufs == #virt_name_indices)
 
 	for index, buf_info in ipairs(multibuf_info.bufs) do
 		local virt_name_index = virt_name_indices[index]
 		buf_info.virt_name_extmark_id = vim.api.nvim_buf_set_extmark(
-			multibuf_info.internal_buf,
+			multibuf,
 			M.multibuf__ns,
 			virt_name_index,
 			0,
@@ -289,15 +264,15 @@ function M.multibuf_reload(multibuf)
 			for digit_index, sign in ipairs(signs) do
 				local group = "___MultibufferDigitGroup" .. digit_index
 				local priority = 11 + ((digit_index - 10) * -1)
-				vim.fn.sign_place(0, group, sign, multibuf_info.internal_buf, { lnum = lnum, priority = priority })
+				vim.fn.sign_place(0, group, sign, multibuf, { lnum = lnum, priority = priority })
 			end
 
-			vim.fn.sign_place(0, "___MultibufferDigitGroup100Space", "MutlibufferDigitSpacer", multibuf_info
-				.internal_buf, { lnum = lnum, priority = 9 })
+			vim.fn.sign_place(0, "___MultibufferDigitGroup100Space", "MutlibufferDigitSpacer", multibuf,
+				{ lnum = lnum, priority = 9 })
 		end
 	end
 
-	vim.api.nvim_set_option_value("modified", false, { buf = multibuf_info.internal_buf })
+	vim.api.nvim_set_option_value("modified", false, { buf = multibuf })
 
 	if win ~= nil then
 		assert(cursor_pos ~= nil)
@@ -309,6 +284,30 @@ function M.mutlibuf__write(multibuf)
 	assert(M.multibuf_is_valid(multibuf), "invalid multibuf")
 	vim.notify("TODO: write multibuf", vim.log.levels.ERROR)
 	M.multibuf_reload(multibuf)
+end
+
+--- Get the buffer in a multibuffer at the line in a multibuffer
+--- @param multibuf integer
+--- @param line integer zero-index line
+--- @return integer|nil bufnr at line or nil if invalid
+function M.multibuf_get_buf_at_line(multibuf, line)
+	assert(M.multibuf_is_valid(multibuf), "invalid multibuf")
+	local multibuf_info = multibufs[multibuf]
+	local extmarks = vim.api.nvim_buf_get_extmarks(multibuf, M.multibuf__ns, line, line, {
+		details = true,
+	})
+
+	for _, extmark in ipairs(extmarks) do
+		local id = extmark[1]
+
+		for _, buf_info in ipairs(multibuf_info.bufs) do
+			if id == buf_info.source_extmark_id then
+				return buf_info.buf
+			end
+		end
+	end
+
+	return nil
 end
 
 --- @return any[]
@@ -340,8 +339,7 @@ function M.setup(opts)
 		pattern = "multibuffer://*",
 		callback = function(args)
 			local buf = args.buf
-			local multibuf = M.multibuf__from_internal_buf(buf)
-			M.mutlibuf__write(multibuf)
+			M.mutlibuf__write(buf)
 		end,
 	})
 
@@ -349,8 +347,7 @@ function M.setup(opts)
 		pattern = "multibuffer://*",
 		callback = function(args)
 			local buf = args.buf
-			local multibuf = M.multibuf__from_internal_buf(buf)
-			M.multibuf_reload(multibuf)
+			M.multibuf_reload(buf)
 		end,
 	})
 end
