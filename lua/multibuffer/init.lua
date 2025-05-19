@@ -49,6 +49,15 @@ local function create_multibuf_header()
 	return { "───────" }
 end
 
+local function get_buf_win(buf)
+	for _, win in ipairs(vim.api.nvim_list_wins()) do
+		if vim.api.nvim_win_get_buf(win) == buf then
+			return win
+		end
+	end
+	return nil
+end
+
 --- @return integer
 function M.create_multibuf()
 	local new_multibuf_id = last_multibuf_id + 1
@@ -169,6 +178,11 @@ end
 function M.multibuf_reload(multibuf)
 	assert(M.multibuf_is_valid(multibuf), "invalid multibuf")
 	local multibuf_info = multibufs[multibuf]
+	local win = get_buf_win(multibuf_info.internal_buf)
+	local cursor_pos
+	if win ~= nil then
+		cursor_pos = vim.api.nvim_win_get_cursor(win)
+	end
 
 	-- clearing whole buffer, not sure if this is necessary in all situations
 	vim.api.nvim_buf_set_lines(multibuf_info.internal_buf, 0, -1, true, {})
@@ -216,6 +230,11 @@ function M.multibuf_reload(multibuf)
 	end
 
 	vim.api.nvim_set_option_value("modified", false, { buf = multibuf_info.internal_buf })
+
+	if win ~= nil then
+		assert(cursor_pos ~= nil)
+		vim.api.nvim_win_set_cursor(win, cursor_pos)
+	end
 end
 
 function M.mutlibuf__write(multibuf)
