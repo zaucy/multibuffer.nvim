@@ -58,13 +58,6 @@ local function get_buf_win(buf)
 	return nil
 end
 
---- @return string
-local function get_digit_sign(digit)
-	assert(digit >= 0)
-	assert(digit < 100)
-	return "MutlibufferDigit" .. tostring(digit)
-end
-
 --- @return string[]
 local function get_line_number_signs(line_num)
 	local digits = {}
@@ -261,7 +254,7 @@ function M.multibuf_reload(multibuf)
 
 
 	local lnum = header_length
-	for index, buf_info in ipairs(multibuf_info.bufs) do
+	for _, buf_info in ipairs(multibuf_info.bufs) do
 		local result    = vim.api.nvim_buf_get_extmark_by_id(
 			buf_info.buf,
 			M.multibuf__ns,
@@ -282,7 +275,7 @@ function M.multibuf_reload(multibuf)
 			end
 
 			vim.fn.sign_place(0, "___MultibufferDigitGroup100Space", "MutlibufferDigitSpacer", multibuf_info
-			.internal_buf, { lnum = lnum, priority = 9 })
+				.internal_buf, { lnum = lnum, priority = 9 })
 		end
 	end
 
@@ -314,13 +307,12 @@ function M.setup(opts)
 	M.multibuf__ns = vim.api.nvim_create_namespace("Multibuf")
 
 	for i = 0, 9 do
-		local text = " " .. tostring(i)
-		vim.fn.sign_define(get_digit_sign(i), { text = text, texthl = "LineNr" })
+		vim.fn.sign_define("MutlibufferDigit" .. tostring(i), { text = " " .. tostring(i), texthl = "LineNr" })
+		vim.fn.sign_define("MutlibufferDigit0" .. tostring(i), { text = "0" .. tostring(i), texthl = "LineNr" })
 	end
 
 	for i = 10, 99 do
-		local text = tostring(i)
-		vim.fn.sign_define(get_digit_sign(i), { text = text, texthl = "LineNr" })
+		vim.fn.sign_define("MutlibufferDigit" .. tostring(i), { text = tostring(i), texthl = "LineNr" })
 	end
 
 	-- NOTE: in the future this spacer should be reserved for some plugin like gitsigns or others that want to show their signs in the multibuf
