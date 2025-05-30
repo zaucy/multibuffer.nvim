@@ -6,6 +6,7 @@
 
 --- @class MultibufInfo
 --- @field bufs MultibufBufInfo[]
+--- @field line_map table<integer, integer>
 
 --- @type MultibufInfo[]
 local multibufs = {}
@@ -17,8 +18,20 @@ local multibufs = {}
 --- @type table<integer, MultibufBufListener>
 local buf_listeners = {}
 
+--- @class MultibufSetupKeymap
+--- @field [1] string|string[]  Mode "short-name" (see |nvim_set_keymap()|), or a list thereof.
+--- @field [2] string           Left-hand side |{lhs}| of the mapping.
+--- @field [3] string|function  Right-hand side |{rhs}| of the mapping, can be a Lua function.
+
+--- @class MultibufSetupOptions
+--- @field keymaps MultibufSetupKeymap[]?
+--- @field render_multibuf_title any?
+--- @field render_expand_lines any?
+
 local M = {
+	--- @type MultibufSetupOptions
 	user_opts = {
+		keymaps = {}
 	},
 }
 
@@ -168,6 +181,21 @@ local function merge_and_sort_source_extmarks(multibuf_buf_info)
 	end
 end
 
+--- @param multibuf integer
+--- @param info MultibufInfo
+local function setup_multibuf_keymaps(multibuf, info)
+	if not M.user_opts.keymaps then
+		return
+	end
+
+	for index, keymap in ipairs(M.user_opts.keymaps) do
+		local success, err = pcall(vim.keymap.set, keymap[1], keymap[2], keymap[3], { buffer = multibuf })
+		if not success and err then
+			vim.notify(string.format("error keymap[%i]: %s", index, err), vim.log.levels.ERROR)
+		end
+	end
+end
+
 --- @return integer
 function M.create_multibuf()
 	local new_multibuf_id = vim.api.nvim_create_buf(true, false)
@@ -175,6 +203,7 @@ function M.create_multibuf()
 	--- @type MultibufInfo
 	local multibuf_info = {
 		bufs = {},
+		line_map = {},
 	}
 	assert(new_multibuf_id ~= 0, "failed to create multibuf")
 	vim.api.nvim_buf_set_name(new_multibuf_id, "multibuffer://" .. new_multibuf_id)
@@ -184,6 +213,11 @@ function M.create_multibuf()
 	vim.api.nvim_buf_set_lines(new_multibuf_id, 0, #header, true, header)
 	vim.api.nvim_set_option_value("modified", false, { buf = new_multibuf_id })
 	table.insert(multibufs, new_multibuf_id, multibuf_info)
+
+	local success, err = pcall(setup_multibuf_keymaps, new_multibuf_id, multibuf_info)
+	if not success and err then
+		vim.notify(err, vim.log.levels.ERROR)
+	end
 
 	return new_multibuf_id
 end
@@ -464,7 +498,7 @@ end
 function M.multibuf_get_buf_at_line(multibuf, line)
 	assert(M.multibuf_is_valid(multibuf), "invalid multibuf")
 	local multibuf_info = multibufs[multibuf]
-	local extmarks = vim.api.nvim_buf_get_extmarks(multibuf, M.multibuf__ns, line, line, {
+	local extmarks = vim.api.nvim_buf_get_extmarks(multibuf, M.multibuf__ns, line, 0, {
 		details = true,
 	})
 
@@ -524,8 +558,9 @@ function M.default_render_expand_lines(opts)
 	return { line }
 end
 
+--- @param opts MultibufSetupOptions
 function M.setup(opts)
-	M.user_opts = opts
+	M.user_opts = vim.tbl_deep_extend('force', M.user_opts, opts)
 	M.multibuf__ns = vim.api.nvim_create_namespace("Multibuf")
 
 	for i = 0, 9 do
