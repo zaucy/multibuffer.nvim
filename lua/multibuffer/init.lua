@@ -166,7 +166,7 @@ local function merge_and_sort_source_extmarks(multibuf_buf_info)
 		end
 
 		table.insert(merged_indices, i)
-		if next_item[2] <= item[3] then
+		if next_item[2] <= item[3] - 1 then
 			item[3] = next_item[3]
 			i = i + 2
 			vim.api.nvim_buf_del_extmark(multibuf_buf_info.buf, M.multibuf__ns, next_item[1])
