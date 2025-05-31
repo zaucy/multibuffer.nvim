@@ -2,6 +2,7 @@
 --- @field buf integer
 --- @field virt_name_extmark_id integer|nil
 --- @field source_extmark_ids integer[]
+--- @field region_extmark_ids integer[] should be same length as source_extmark_ids and extmark line count should be same
 --- @field virt_expand_extmark_ids integer[] should be same length as source_extmark_ids + 1 (one for the bottom)
 
 --- @class MultibufInfo
@@ -196,6 +197,21 @@ local function setup_multibuf_keymaps(multibuf, info)
 	end
 end
 
+--- @param buf integer
+--- @param extmark integer
+--- @return number,number
+local function get_extmark_range(buf, extmark)
+	assert(type(buf) == "number")
+	assert(type(extmark) == "number")
+
+	local result    = vim.api.nvim_buf_get_extmark_by_id(buf, M.multibuf__ns, extmark, { details = true })
+	local start_row = result[1]
+	local end_row   = result[3].end_row
+	assert(type(end_row) == "number")
+
+	return start_row, end_row
+end
+
 --- @return integer
 function M.create_multibuf()
 	local new_multibuf_id = vim.api.nvim_create_buf(true, false)
@@ -276,6 +292,7 @@ function M.multibuf_add_bufs(multibuf, opts_list)
 			local source_extmark_id = vim.api.nvim_buf_set_extmark(buf, M.multibuf__ns, start_row, 0, {
 				strict = true,
 				end_row = end_row,
+				end_right_gravity = true,
 				priority = 20000, -- ya i dunno
 			})
 			table.insert(source_extmark_ids, source_extmark_id)
@@ -298,6 +315,7 @@ function M.multibuf_add_bufs(multibuf, opts_list)
 		local multibuf_buf_info = {
 			buf = buf,
 			source_extmark_ids = source_extmark_ids,
+			region_extmark_ids = {},
 			virt_name_extmark_id = nil,
 			virt_expand_extmark_ids = {},
 		}
@@ -399,16 +417,7 @@ function M.multibuf_reload(multibuf)
 	for _, buf_info in ipairs(multibuf_info.bufs) do
 		local last_end_row = 0
 		for source_extmark_id_index, source_extmark_id in ipairs(buf_info.source_extmark_ids) do
-			local result    = vim.api.nvim_buf_get_extmark_by_id(
-				buf_info.buf,
-				M.multibuf__ns,
-				source_extmark_id,
-				{ details = true }
-			)
-
-			local start_row = result[1]
-			local end_row   = result[3].end_row
-			assert(type(end_row) == "number")
+			local start_row, end_row = get_extmark_range(buf_info.buf, source_extmark_id)
 
 			for line_index = start_row, end_row - 1 do
 				local signs = get_line_number_signs(line_index + 1)
@@ -477,6 +486,37 @@ function M.multibuf_reload(multibuf)
 		-- )
 	end
 
+
+	local current_multibuf_line_index = header_length
+	for _, buf_info in ipairs(multibuf_info.bufs) do
+		for i, source_extmark in ipairs(buf_info.source_extmark_ids) do
+			local source_start_row, source_end_row = get_extmark_range(buf_info.buf, source_extmark)
+			local source_length = source_end_row - source_start_row
+
+			buf_info.region_extmark_ids[i] = vim.api.nvim_buf_set_extmark(
+				multibuf,
+				M.multibuf__ns,
+				current_multibuf_line_index,
+				0,
+				{
+					id = buf_info.region_extmark_ids[i],
+					end_row = current_multibuf_line_index + source_length,
+					end_right_gravity = true,
+				}
+			)
+
+			current_multibuf_line_index = current_multibuf_line_index + source_length
+		end
+	end
+
+
+	for _, buf_info in ipairs(multibuf_info.bufs) do
+		while #buf_info.region_extmark_ids > #buf_info.source_extmark_ids do
+			local old_extmark = table.remove(buf_info.region_extmark_ids, #buf_info.region_extmark_ids)
+			vim.api.nvim_buf_del_extmark(multibuf, M.multibuf__ns, old_extmark)
+		end
+	end
+
 	vim.api.nvim_set_option_value("modified", false, { buf = multibuf })
 
 	if win ~= nil then
@@ -494,27 +534,38 @@ end
 --- Get the buffer in a multibuffer at the line in a multibuffer
 --- @param multibuf integer
 --- @param line integer zero-index line
---- @return integer|nil bufnr at line or nil if invalid
+--- @return integer|nil,integer|nil bufnr at line or nil if invalid
 function M.multibuf_get_buf_at_line(multibuf, line)
 	assert(M.multibuf_is_valid(multibuf), "invalid multibuf")
 	local multibuf_info = multibufs[multibuf]
-	local extmarks = vim.api.nvim_buf_get_extmarks(multibuf, M.multibuf__ns, line, 0, {
+	local extmarks = vim.api.nvim_buf_get_extmarks(multibuf, M.multibuf__ns, { line, 0 }, { line, -1 }, {
 		details = true,
+		overlap = true,
 	})
+
+	if #extmarks == 0 then
+		error(string.format("no extmarks for multibuf %i", multibuf), vim.log.levels.WARN)
+		return nil, nil
+	end
 
 	for _, extmark in ipairs(extmarks) do
 		local id = extmark[1]
 
 		for _, buf_info in ipairs(multibuf_info.bufs) do
-			for _, source_extmark_id in ipairs(buf_info.source_extmark_ids) do
-				if id == source_extmark_id then
-					return buf_info.buf
+			for i, region_extmark_id in ipairs(buf_info.region_extmark_ids) do
+				if id == region_extmark_id then
+					local source_extmark_id = buf_info.source_extmark_ids[i]
+					local region_row_start, region_row_end = get_extmark_range(multibuf, region_extmark_id)
+					local source_row_start, source_row_end = get_extmark_range(buf_info.buf, source_extmark_id)
+					local diff = line - region_row_start
+
+					return buf_info.buf, (source_row_start + diff)
 				end
 			end
 		end
 	end
 
-	return nil
+	return nil, nil
 end
 
 --- @return any[]
