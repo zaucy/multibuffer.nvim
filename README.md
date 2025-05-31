@@ -56,6 +56,23 @@ keymaps = {
 }
 ```
 
+Turn off line numbers in multibufs. Mulibuffers use the signcolumn to show the source line numbers and showing both line numbers can look confusing.
+
+```lua
+vim.api.nvim_create_autocmd("BufWinEnter", {
+	pattern = "multibuffer://*",
+	callback = function(args)
+		local winid = vim.api.nvim_get_current_win()
+		-- no multibuffer line numbers
+		vim.api.nvim_set_option_value("number", false, { scope = "local", win = winid })
+		vim.api.nvim_set_option_value("relativenumber", false, { scope = "local", win = winid })
+
+		-- leave some room for multibuf line number signcolumn
+		vim.api.nvim_set_option_value("signcolumn", "yes:3", { scope = "local", win = winid })
+	end,
+})
+```
+
 `<C-a>` in [telescope](https://github.com/nvim-telescope/telescope.nvim) to open multibuf of results
 
 ```lua
