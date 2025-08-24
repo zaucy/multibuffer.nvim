@@ -630,9 +630,24 @@ function M.multibuf_reload(multibuf)
 	end
 end
 
-function M.mutlibuf__write(multibuf)
+function M.mutlibuf__write(args)
+	local multibuf = args.buf
+	local force = vim.v.cmdbang == 1
 	assert(M.multibuf_is_valid(multibuf), "invalid multibuf")
-	vim.notify("TODO: write multibuf", vim.log.levels.ERROR)
+	local multibuf_info = multibufs[multibuf]
+
+	local write_fn = function()
+		if force then
+			vim.cmd("write!")
+		else
+			vim.cmd("write")
+		end
+	end
+
+	for _, info in ipairs(multibuf_info.bufs) do
+		vim.api.nvim_buf_call(info.buf, write_fn)
+	end
+
 	M.multibuf_reload(multibuf)
 end
 
@@ -734,8 +749,7 @@ function M.setup(opts)
 	vim.api.nvim_create_autocmd("BufWriteCmd", {
 		pattern = "multibuffer://*",
 		callback = function(args)
-			local buf = args.buf
-			M.mutlibuf__write(buf)
+			M.mutlibuf__write(args)
 		end,
 	})
 
