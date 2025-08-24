@@ -2,7 +2,23 @@
 vim.opt.signcolumn = "auto:4"
 
 local multibuffer = require("multibuffer")
-multibuffer.setup({})
+multibuffer.setup({
+	keymaps = {
+		{
+			"n",
+			"<cr>",
+			function()
+				local multibuf = vim.api.nvim_get_current_buf()
+				local cursor = vim.api.nvim_win_get_cursor(0)
+				local buf, line = multibuffer.multibuf_get_buf_at_line(multibuf, cursor[1])
+				if buf then
+					vim.api.nvim_set_current_buf(buf)
+					vim.api.nvim_win_set_cursor(0, { line, cursor[2] })
+				end
+			end,
+		},
+	},
+})
 
 --- @return integer
 local function open_file(file)
@@ -16,6 +32,6 @@ local function open_file(file)
 end
 
 local mbuf = multibuffer.create_multibuf()
-multibuffer.multibuf_add_buf(mbuf, { buf = open_file('a.txt'), regions = { { start_row = 119, end_row = 119 } } })
-multibuffer.multibuf_add_buf(mbuf, { buf = open_file('b.txt'), regions = { { start_row = 0, end_row = 0 } } })
+multibuffer.multibuf_add_buf(mbuf, { buf = open_file("a.txt"), regions = { { start_row = 119, end_row = 119 } } })
+multibuffer.multibuf_add_buf(mbuf, { buf = open_file("b.txt"), regions = { { start_row = 0, end_row = 0 } } })
 multibuffer.win_set_multibuf(0, mbuf)
