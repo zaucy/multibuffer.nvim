@@ -35,3 +35,7 @@ local mbuf = multibuffer.create_multibuf()
 multibuffer.multibuf_add_buf(mbuf, { buf = open_file("a.txt"), regions = { { start_row = 119, end_row = 119 } } })
 multibuffer.multibuf_add_buf(mbuf, { buf = open_file("b.txt"), regions = { { start_row = 0, end_row = 0 } } })
 multibuffer.win_set_multibuf(0, mbuf)
+
+vim.cmd.wincmd("s")
+vim.cmd.edit("b.txt")
+vim.cmd.wincmd("j")
