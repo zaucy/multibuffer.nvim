@@ -190,7 +190,7 @@ local function multibuf_changed(args)
 		local details = multibuf_info.region_extmark_details[dirty_region_extmark]
 		local region_row_start, region_row_end = get_extmark_range(buf, dirty_region_extmark)
 		local source_row_start, source_row_end = get_extmark_range(details.source_buf, details.source_extmark)
-		assert(region_row_end > region_row_start)
+		assert(region_row_end >= region_row_start)
 		assert(source_row_end > source_row_start)
 
 		local old_lines = vim.api.nvim_buf_get_lines(details.source_buf, source_row_start, source_row_end, true)
@@ -206,9 +206,11 @@ local function multibuf_changed(args)
 		local region_row_start, region_row_end = get_extmark_range(buf, dirty_region_extmark)
 		local source_row_start, source_row_end = get_extmark_range(details.source_buf, details.source_extmark)
 		local new_lines = vim.api.nvim_buf_get_lines(buf, region_row_start, region_row_end, true)
-		assert(region_row_end > region_row_start)
+		if #new_lines == 0 then
+			new_lines = { "" }
+		end
+		assert(region_row_end >= region_row_start)
 		assert(source_row_end > source_row_start)
-		assert(#new_lines >= (source_row_end - source_row_start))
 
 		vim.api.nvim_buf_set_lines(details.source_buf, source_row_start, source_row_end, true, new_lines)
 		vim.api.nvim_buf_set_extmark(details.source_buf, M.multibuf__ns, source_row_start, 0, {
@@ -222,7 +224,8 @@ local function multibuf_changed(args)
 
 	multibuf_info.dirty_region_extmarks = {}
 
-	-- M.multibuf_reload(buf)
+	-- TODO: reload here is inefficient we should do an incremental update instead
+	M.multibuf_reload(buf)
 end
 
 local function multibuf_buf_changed(args)
