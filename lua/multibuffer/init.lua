@@ -193,7 +193,7 @@ local function multibuf_changed(args)
 		assert(region_row_end > region_row_start)
 		assert(source_row_end > source_row_start)
 
-		local old_lines = vim.api.nvim_buf_get_lines(details.source_buf, source_row_start, source_row_end - 1, true)
+		local old_lines = vim.api.nvim_buf_get_lines(details.source_buf, source_row_start, source_row_end, true)
 		local new_lines = vim.api.nvim_buf_get_lines(buf, region_row_start, region_row_end, true)
 
 		if not lines_equal(old_lines, new_lines) then
@@ -214,7 +214,7 @@ local function multibuf_changed(args)
 		vim.api.nvim_buf_set_extmark(details.source_buf, M.multibuf__ns, source_row_start, 0, {
 			id = details.source_extmark,
 			strict = true,
-			end_row = source_row_end,
+			end_row = source_row_start + #new_lines,
 			end_right_gravity = true,
 			priority = 20000, -- ya i dunno
 		})
