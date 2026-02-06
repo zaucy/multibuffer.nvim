@@ -339,6 +339,38 @@ function M.multibuf__wipeout(buf)
 	end
 end
 
+local function place_line_number_signs(multibuf, target_row, source_row)
+	local abs_lnum = source_row + 1
+	local signs = get_line_number_signs(abs_lnum)
+
+	for digit_idx, sign_text in ipairs(signs) do
+		-- Clean up sign text (handles legacy format if still present in get_line_number_signs)
+		local text = sign_text:match("Digit(%d+)") or (sign_text == "MutlibufferDigitSpacer" and " " or sign_text)
+		if text:match("^%d$") then text = " " .. text end -- Pad single digits
+
+		vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
+			sign_text = text,
+			sign_hl_group = "LineNr",
+			priority = 100 - digit_idx,
+		})
+	end
+	-- Spacer sign
+	vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
+		sign_text = " ",
+		sign_hl_group = "LineNr",
+		priority = 10,
+	})
+end
+
+local function place_expander(multibuf, target_row, opts)
+	vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
+		virt_lines = render_expand_lines(opts),
+		virt_lines_above = true,
+		virt_lines_leftcol = true,
+		priority = 20001,
+	})
+end
+
 function M.multibuf_reload(multibuf)
 	assert(M.multibuf_is_valid(multibuf), "invalid multibuf")
 	local multibuf_info = multibufs[multibuf]
@@ -389,43 +421,16 @@ function M.multibuf_reload(multibuf)
 			local start_row, end_row = get_extmark_range(buf_info.buf, source_extmark_id)
 			local slice_len = end_row - start_row
 
-			-- Place Line Number Signs using Extmarks
+			-- Place Line Number Signs
 			for i = 0, slice_len - 1 do
-				local abs_lnum = start_row + i + 1
-				local signs = get_line_number_signs(abs_lnum)
-				local target_row = current_lnum + i
-
-				for digit_idx, sign_text in ipairs(signs) do
-					-- Map sign names back to text if needed, or just use text if we refactor get_line_number_signs
-					-- For now, let's assume we use the text directly for performance
-					local text = sign_text:match("Digit(%d+)") or (sign_text == "MutlibufferDigitSpacer" and " " or sign_text)
-					if text:match("^%d$") then text = " " .. text end -- Pad single digits
-
-					vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
-						sign_text = text,
-						sign_hl_group = "LineNr",
-						priority = 100 - digit_idx,
-					})
-				end
-				-- Spacer sign
-				vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
-					sign_text = " ",
-					sign_hl_group = "LineNr",
-					priority = 10,
-				})
+				place_line_number_signs(multibuf, current_lnum + i, start_row + i)
 			end
 
 			-- Set Expander
-			local expand_direction = (slice_idx == 1) and "above" or "both"
-			vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, virt_expand_lnums[virt_expand_index], 0, {
-				virt_lines = render_expand_lines({
-					expand_direction = expand_direction,
-					count = start_row - last_end_row,
-					window = win or 0,
-				}),
-				virt_lines_above = true,
-				virt_lines_leftcol = true,
-				priority = 20001,
+			place_expander(multibuf, virt_expand_lnums[virt_expand_index], {
+				expand_direction = (slice_idx == 1) and "above" or "both",
+				count = start_row - last_end_row,
+				window = win or 0,
 			})
 
 			-- Track regions for mapping
