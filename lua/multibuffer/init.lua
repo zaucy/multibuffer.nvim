@@ -19,7 +19,13 @@
 --- @field multibufs integer[] List of multibuffers listening to this source
 --- @field change_autocmd_id integer ID of the TextChanged autocmd
 
+--- @class MultibufSetupKeymap
+--- @field [1] string|string[] Mode(s)
+--- @field [2] string LHS
+--- @field [3] string|function RHS
+
 --- @class MultibufSetupOptions
+--- @field keymaps MultibufSetupKeymap[]? Initial keymaps (Deprecated: use FileType autocmds)
 --- @field render_multibuf_title (fun(bufnr: integer): any[])? Custom title renderer
 --- @field render_expand_lines (fun(opts: multibuffer.RenderExpandLinesOptions): any[])? Custom expander renderer
 
@@ -36,10 +42,12 @@ local buf_listeners = {}
 
 local M = {
 	--- @type MultibufSetupOptions
-	user_opts = {},
-	--- @type integer Namespace for structural elements (signs, titles)
+	user_opts = {
+		keymaps = {},
+	},
+	--- @type integer|nil Namespace for structural elements (signs, titles)
 	multibuf__ns = nil,
-	--- @type integer Namespace for live highlight projection
+	--- @type integer|nil Namespace for live highlight projection
 	multibuf_hl_ns = nil,
 }
 
@@ -211,20 +219,16 @@ local function project_highlights(multibuf, source_buf, s_start, s_end, target_s
 					return
 				end
 
-				-- Cache multibuffer lines for column clamping (performance)
+				-- Cache multibuffer lines for column clamping
 				local mb_lines =
 					vim.api.nvim_buf_get_lines(multibuf, target_start, target_start + (s_end - s_start), false)
 
 				for id, node, metadata in query:iter_captures(tstree:root(), source_buf, s_start, s_end) do
 					local sr, sc, er, ec = node:range()
-
-					-- Map coordinates to multibuffer
 					local tr = target_start + (sr - s_start)
 					local ter = target_start + (er - s_start)
 
-					-- Safety: Ensure we don't project outside the target slice or buffer
 					if tr >= target_start then
-						-- Column Clamping: Neovim errors if end_col > line_length
 						local line_idx = tr - target_start
 						local target_line = mb_lines[line_idx + 1] or ""
 						local max_col = #target_line
@@ -252,8 +256,6 @@ local function project_highlights(multibuf, source_buf, s_start, s_end, target_s
 		if d.ns_id ~= M.multibuf__ns then
 			local tr = target_start + (r - s_start)
 			local ter = d.end_row and (target_start + (d.end_row - s_start))
-
-			-- Only project if it falls within our target range
 			if tr >= target_start then
 				d.id, d.ns_id, d.end_row, d.ephemeral = nil, nil, ter, true
 				pcall(vim.api.nvim_buf_set_extmark, multibuf, M.multibuf_hl_ns, tr, c, d)
@@ -263,6 +265,24 @@ local function project_highlights(multibuf, source_buf, s_start, s_end, target_s
 end
 
 -- ──────── Core Multibuffer Management ────────
+
+--- Internal: Turns any buffer handle into a functional multibuffer.
+--- Useful for taking over existing buffers (like inccommand previews).
+--- @param bufnr integer
+function M._initialize_multibuffer(bufnr)
+	if multibufs[bufnr] then
+		return
+	end
+
+	local info = { bufs = {} }
+	vim.api.nvim_set_option_value("buftype", "acwrite", { buf = bufnr })
+	vim.api.nvim_set_option_value("filetype", "multibuffer", { buf = bufnr })
+
+	local header = create_multibuf_header()
+	vim.api.nvim_buf_set_lines(bufnr, 0, #header, true, header)
+
+	multibufs[bufnr] = info
+end
 
 --- @param multibuf integer
 function M.multibuf_reload(multibuf)
@@ -405,13 +425,8 @@ end
 --- @return integer bufnr
 function M.create_multibuf()
 	local id = vim.api.nvim_create_buf(true, false)
-	local info = { bufs = {} }
 	vim.api.nvim_buf_set_name(id, "multibuffer://" .. id)
-	vim.api.nvim_set_option_value("buftype", "acwrite", { buf = id })
-	vim.api.nvim_set_option_value("filetype", "multibuffer", { buf = id })
-	local header = create_multibuf_header()
-	vim.api.nvim_buf_set_lines(id, 0, #header, true, header)
-	multibufs[id] = info
+	M._initialize_multibuffer(id)
 	return id
 end
 
@@ -419,6 +434,32 @@ end
 --- @return boolean
 function M.multibuf_is_valid(buf)
 	return multibufs[buf] ~= nil
+end
+
+--- @param buf integer
+--- @return MultibufInfo|nil
+function M._get_info(buf)
+	return multibufs[buf]
+end
+
+--- Properly clears all slices and their associated extmarks in source buffers.
+--- @param mb integer multibuffer handle
+function M.multibuf_clear_slices(mb)
+	local info = multibufs[mb]
+	if not info then
+		return
+	end
+
+	for _, buf_info in ipairs(info.bufs) do
+		if vim.api.nvim_buf_is_valid(buf_info.buf) then
+			-- Remove the extmarks we placed in the source buffer
+			for _, id in ipairs(buf_info.source_extmark_ids) do
+				pcall(vim.api.nvim_buf_del_extmark, buf_info.buf, M.multibuf__ns, id)
+			end
+		end
+	end
+
+	info.bufs = {}
 end
 
 --- @param mb integer
