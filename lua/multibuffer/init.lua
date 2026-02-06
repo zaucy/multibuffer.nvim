@@ -290,7 +290,10 @@ function M.multibuf_reload(multibuf)
 		end
 	end
 	table.insert(virt_expand_lnums, #all_lines)
+
+	vim.api.nvim_set_option_value("modifiable", true, { buf = multibuf })
 	vim.api.nvim_buf_set_lines(multibuf, 0, -1, true, all_lines)
+	vim.api.nvim_set_option_value("modifiable", false, { buf = multibuf })
 
 	-- 2. Render Structure (Titles, Signs, Expanders)
 	local current_lnum = #header
@@ -411,6 +414,7 @@ function M.create_multibuf()
 	vim.api.nvim_set_option_value("filetype", "multibuffer", { buf = id })
 	local header = create_multibuf_header()
 	vim.api.nvim_buf_set_lines(id, 0, #header, true, header)
+	vim.api.nvim_set_option_value("modifiable", false, { buf = id })
 	multibufs[id] = info
 	return id
 end
