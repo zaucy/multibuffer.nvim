@@ -521,6 +521,47 @@ function M.multibuf_get_buf_at_line(mb, line)
 	end
 end
 
+--- get the line number in the multibuf that points to bufnr optionally
+--- specifically the lnum in the bufnr. if lnum is nil then the first bufnr in
+--- the multibuf thats found is returned
+--- @param mb integer multibuf id
+--- @param bufnr integer the buffer to look for in the mutlibuffer
+--- @param lnum integer|nil optional line number to look for in bufnr
+--- @return integer|nil multibuf_lnum the line number of the multibuf or nil if
+--- the bufnr is not in the multibuf
+function M.multibuf_buf_get_line(mb, bufnr, lnum)
+	vim.validate("mb", mb, "number")
+	vim.validate("bufnr", bufnr, "number")
+	vim.validate("lnum", lnum, { "number", "nil" })
+
+	local info = multibufs[mb]
+	if not info then
+		return nil
+	end
+	for _, b in ipairs(info.bufs) do
+		if b.buf == bufnr then
+			for i, source_id in ipairs(b.source_extmark_ids) do
+				local ss, se = get_extmark_range(bufnr, source_id)
+				local region_id = b.region_extmark_ids[i]
+				if not region_id then
+					goto continue
+				end
+
+				if lnum == nil then
+					local ts, _ = get_extmark_range(mb, region_id)
+					return ts
+				elseif lnum >= ss and lnum < se then
+					local ts, _ = get_extmark_range(mb, region_id)
+					return ts + (lnum - ss)
+				end
+				::continue::
+			end
+		end
+	end
+
+	return nil
+end
+
 --- @param bufnr integer
 --- @return any[]
 function M.default_render_multibuf_title(bufnr)
