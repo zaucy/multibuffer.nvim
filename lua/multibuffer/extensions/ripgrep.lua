@@ -15,6 +15,9 @@ local current_proc = nil
 --- @type integer|nil timer for debouncing
 local debounce_timer = nil
 
+--- @type string|nil tracks the query of the currently running process
+local last_spawned_query = nil
+
 -- ──────── Helper: Process Parsing ────────
 
 --- Parses rg --vimgrep output into MultibufAddBufOptions
@@ -22,19 +25,14 @@ local debounce_timer = nil
 --- @return MultibufAddBufOptions[]
 local function parse_vimgrep(output)
 	local results_by_buf = {}
-	local sorted_bufs = {}
+	local bufs = {}
 
-	-- Use gsplit for robust line handling across platforms
 	for line in vim.gsplit(output, "\n", { plain = true }) do
-		-- Strip trailing \r if present (Windows)
 		line = line:gsub("\r$", "")
-
 		if line ~= "" then
 			-- Format: file:line:col:text
-			-- We use greedy (.+) for the file to correctly handle C:\ drive letters on Windows.
-			-- Treesitter/LUA patterns will backtrack to find the digits.
-			local file, lnum, _, _ = line:match("^(.+):(%d+):(%d+):(.*)$")
-
+			-- We use a more robust match that handles Windows drive letters
+			local file, lnum = line:match("^(.+):(%d+):%d+:")
 			if file and lnum then
 				local row = tonumber(lnum) - 1
 				local bufnr = vim.fn.bufadd(file)
@@ -44,16 +42,20 @@ local function parse_vimgrep(output)
 
 				if not results_by_buf[bufnr] then
 					results_by_buf[bufnr] = { buf = bufnr, regions = {} }
-					table.insert(sorted_bufs, bufnr)
+					table.insert(bufs, bufnr)
 				end
-
 				table.insert(results_by_buf[bufnr].regions, { start_row = row, end_row = row })
 			end
 		end
 	end
 
+	-- Sort buffers by name for consistent UI display
+	table.sort(bufs, function(a, b)
+		return vim.api.nvim_buf_get_name(a) < vim.api.nvim_buf_get_name(b)
+	end)
+
 	local final_list = {}
-	for _, bufnr in ipairs(sorted_bufs) do
+	for _, bufnr in ipairs(bufs) do
 		table.insert(final_list, results_by_buf[bufnr])
 	end
 	return final_list
@@ -69,16 +71,24 @@ local function run_rg(query, callback)
 	end
 
 	if query == "" then
+		last_spawned_query = ""
 		callback({})
 		return
 	end
 
-	current_proc = vim.system({ "rg", "--vimgrep", "--smart-case", query }, { text = true }, function(out)
+	last_spawned_query = query
+	current_proc = vim.system({ "rg", "--vimgrep", "--smart-case", "--sort", "path", query }, { text = true }, function(out)
 		current_proc = nil
-		local results = parse_vimgrep(out.stdout or "")
-		vim.schedule(function()
-			callback(results)
-		end)
+		-- Only process if ripgrep succeeded (code 0)
+		if out.code == 0 then
+			vim.schedule(function()
+				-- Only apply if this is still the results we want
+				if query == last_spawned_query then
+					local results = parse_vimgrep(out.stdout or "")
+					callback(results)
+				end
+			end)
+		end
 	end)
 end
 
@@ -86,31 +96,27 @@ end
 
 --- @param opts table
 function M._search_preview(opts, ns, buf)
-	local query = opts.fargs[1]
+	local query = opts.args or ""
 	local preview_buf = buf or vim.api.nvim_get_current_buf()
 
-	-- 1. Initialize the preview buffer as a multibuffer if needed
+	-- Initialize the preview buffer
 	mbuf._initialize_multibuffer(preview_buf)
 
-	-- 2. Debounced search
 	if debounce_timer then
 		vim.fn.timer_stop(debounce_timer)
 	end
 
-	debounce_timer = vim.fn.timer_start(50, function()
+	debounce_timer = vim.fn.timer_start(20, function() -- Lower debounce for snappier feel
 		run_rg(query, function(results)
-			-- Update Cache
 			search_cache = { query = query, results = results }
-
-			-- Only update if buffer is still valid (user hasn't closed cmdline)
+			
 			if vim.api.nvim_buf_is_valid(preview_buf) then
-				-- Reset slices before adding new ones
-				local info = mbuf._get_info(preview_buf)
-				if info then
-					info.bufs = {}
-				end
-
+				-- Properly clear old slices (prevents extmark leaks)
+				mbuf.multibuf_clear_slices(preview_buf)
 				mbuf.multibuf_add_bufs(preview_buf, results)
+				
+				-- Force a redraw so the inccommand window updates immediately
+				vim.cmd("redraw")
 			end
 		end)
 	end)
@@ -121,19 +127,35 @@ end
 --- @param opts table
 function M._search_execute(opts)
 	local query = opts.args
-	local final_mbuf = mbuf.create_multibuf()
-	vim.api.nvim_buf_set_name(final_mbuf, "multibuffer://search/" .. query)
+	local target_name = "mb-search://" .. query
 
-	-- 1. Use Cache if available and matching
-	if search_cache and search_cache.query == query then
-		mbuf.multibuf_add_bufs(final_mbuf, search_cache.results)
-		vim.api.nvim_set_current_buf(final_mbuf)
+	-- Find if a buffer with EXACTLY this name already exists
+	local target_buf = -1
+	for _, b in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.api.nvim_buf_get_name(b) == target_name then
+			target_buf = b
+			break
+		end
+	end
+
+	if target_buf ~= -1 then
+		mbuf._initialize_multibuffer(target_buf)
+		mbuf.multibuf_clear_slices(target_buf)
 	else
-		-- 2. Fallback to async search if cache is cold
-		run_rg(query, function(results)
-			mbuf.multibuf_add_bufs(final_mbuf, results)
-			vim.api.nvim_set_current_buf(final_mbuf)
-		end)
+		target_buf = vim.api.nvim_create_buf(true, false)
+		pcall(vim.api.nvim_buf_set_name, target_buf, target_name)
+		mbuf._initialize_multibuffer(target_buf)
+	end
+
+	local function apply(results)
+		mbuf.multibuf_add_bufs(target_buf, results)
+		vim.api.nvim_set_current_buf(target_buf)
+	end
+
+	if search_cache and search_cache.query == query then
+		apply(search_cache.results)
+	else
+		run_rg(query, apply)
 	end
 end
 
@@ -143,15 +165,14 @@ function M.setup()
 	vim.api.nvim_create_user_command("Mgrep", M._search_execute, {
 		nargs = 1,
 		preview = function(opts, ns, buf)
-			local success, result_or_error = pcall(M._search_preview, opts, ns, buf)
-			if not success then
+			local ok, res = pcall(M._search_preview, opts, ns, buf)
+			if not ok then
 				vim.schedule(function()
-					-- vim.notify(vim.inspect(buf))
-					vim.notify(result_or_error)
+					vim.notify("Mgrep Preview Error: " .. tostring(res), vim.log.levels.ERROR)
 				end)
 				return 0
 			end
-			return result_or_error
+			return res
 		end,
 		desc = "Live Multibuffer Grep",
 	})

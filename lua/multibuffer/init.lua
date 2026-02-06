@@ -442,6 +442,26 @@ function M._get_info(buf)
 	return multibufs[buf]
 end
 
+--- Properly clears all slices and their associated extmarks in source buffers.
+--- @param mb integer multibuffer handle
+function M.multibuf_clear_slices(mb)
+	local info = multibufs[mb]
+	if not info then
+		return
+	end
+
+	for _, buf_info in ipairs(info.bufs) do
+		if vim.api.nvim_buf_is_valid(buf_info.buf) then
+			-- Remove the extmarks we placed in the source buffer
+			for _, id in ipairs(buf_info.source_extmark_ids) do
+				pcall(vim.api.nvim_buf_del_extmark, buf_info.buf, M.multibuf__ns, id)
+			end
+		end
+	end
+
+	info.bufs = {}
+end
+
 --- @param mb integer
 --- @param opts MultibufAddBufOptions
 function M.multibuf_add_buf(mb, opts)
