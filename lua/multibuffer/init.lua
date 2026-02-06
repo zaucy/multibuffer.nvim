@@ -350,6 +350,7 @@ function M.create_multibuf()
 	local info = { bufs = {} }
 	vim.api.nvim_buf_set_name(id, "multibuffer://" .. id)
 	vim.api.nvim_set_option_value("buftype", "acwrite", { buf = id })
+	vim.api.nvim_set_option_value("filetype", "multibuffer", { buf = id })
 	local header = create_multibuf_header()
 	vim.api.nvim_buf_set_lines(id, 0, #header, true, header)
 	multibufs[id] = info
