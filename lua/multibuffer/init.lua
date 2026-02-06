@@ -19,13 +19,7 @@
 --- @field multibufs integer[] List of multibuffers listening to this source
 --- @field change_autocmd_id integer ID of the TextChanged autocmd
 
---- @class MultibufSetupKeymap
---- @field [1] string|string[] Mode(s)
---- @field [2] string LHS
---- @field [3] string|function RHS
-
 --- @class MultibufSetupOptions
---- @field keymaps MultibufSetupKeymap[]? Initial keymaps
 --- @field render_multibuf_title (fun(bufnr: integer): any[])? Custom title renderer
 --- @field render_expand_lines (fun(opts: multibuffer.RenderExpandLinesOptions): any[])? Custom expander renderer
 
@@ -42,9 +36,7 @@ local buf_listeners = {}
 
 local M = {
 	--- @type MultibufSetupOptions
-	user_opts = {
-		keymaps = {},
-	},
+	user_opts = {},
 	--- @type integer Namespace for structural elements (signs, titles)
 	multibuf__ns = nil,
 	--- @type integer Namespace for live highlight projection
