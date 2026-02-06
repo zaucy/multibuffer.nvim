@@ -79,6 +79,22 @@ vim.api.nvim_create_autocmd({ "BufEnter", "BufNew", "BufWinEnter", "TermOpen" },
 
 ## Examples
 
+### Live Ripgrep (Zed-style search)
+
+The `ripgrep` extension provides a `:Mgrep` command that uses `inccommand` to show a live multibuffer of search results as you type.
+
+```lua
+-- In your init.lua
+require('multibuffer.extensions.ripgrep').setup()
+```
+
+To see the live preview, ensure `inccommand` is set:
+```lua
+vim.opt.inccommand = "split"
+```
+
+Now run `:Mgrep your_query` and watch the multibuffer update live!
+
 ### Customize your multibuf title separators
 
 In setup options you may pass a function called `render_multibuf_title` that returns a list to be rendered in the virtual text. Here is an example that uses nvim-web-devicons and a rounded border.
