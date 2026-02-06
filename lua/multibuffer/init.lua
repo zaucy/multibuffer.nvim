@@ -1,31 +1,60 @@
+--- @class MultibufRegion
+--- @field start_row integer 0-indexed start row
+--- @field end_row integer 0-indexed end row (inclusive)
+
+--- @class MultibufAddBufOptions
+--- @field buf integer Buffer handle
+--- @field regions MultibufRegion[] List of regions to include
+
 --- @class MultibufBufInfo
---- @field buf integer
---- @field virt_name_extmark_id integer|nil
---- @field source_extmark_ids integer[]
---- @field region_extmark_ids integer[] should be same length as source_extmark_ids
---- @field virt_expand_extmark_ids integer[] should be same length as source_extmark_ids
+--- @field buf integer Buffer handle
+--- @field source_extmark_ids integer[] IDs of extmarks tracking source regions
+--- @field region_extmark_ids integer[] IDs of extmarks tracking regions in multibuffer
+--- @field virt_expand_extmark_ids integer[] IDs of extmarks for expander UI
 
 --- @class MultibufInfo
---- @field bufs MultibufBufInfo[]
+--- @field bufs MultibufBufInfo[] Info about included buffers
+
+--- @class MultibufBufListener
+--- @field multibufs integer[] List of multibuffers listening to this source
+--- @field change_autocmd_id integer ID of the TextChanged autocmd
+
+--- @class MultibufSetupKeymap
+--- @field [1] string|string[] Mode(s)
+--- @field [2] string LHS
+--- @field [3] string|function RHS
+
+--- @class MultibufSetupOptions
+--- @field keymaps MultibufSetupKeymap[]? Initial keymaps
+--- @field render_multibuf_title (fun(bufnr: integer): any[])? Custom title renderer
+--- @field render_expand_lines (fun(opts: multibuffer.RenderExpandLinesOptions): any[])? Custom expander renderer
+
+--- @class multibuffer.RenderExpandLinesOptions
+--- @field expand_direction "above"|"below"|"both"
+--- @field count integer Number of hidden lines
+--- @field window integer Window handle
 
 --- @type table<integer, MultibufInfo>
 local multibufs = {}
-
---- @class MultibufBufListener
---- @field multibufs integer[]
---- @field change_autocmd_id integer
 
 --- @type table<integer, MultibufBufListener>
 local buf_listeners = {}
 
 local M = {
+	--- @type MultibufSetupOptions
 	user_opts = {
 		keymaps = {}
 	},
+	--- @type integer Namespace for structural elements (signs, titles)
+	multibuf__ns = nil,
+	--- @type integer Namespace for live highlight projection
+	multibuf_hl_ns = nil,
 }
 
 -- ──────── Helper Functions ────────
 
+--- @param list any[]
+--- @param item any
 local function list_insert_unique(list, item)
 	for _, v in ipairs(list) do
 		if v == item then return end
@@ -33,11 +62,17 @@ local function list_insert_unique(list, item)
 	table.insert(list, item)
 end
 
+--- @param num number
+--- @param min number
+--- @param max number
+--- @return number
 local function clamp(num, min, max)
 	if num < min then return min elseif num > max then return max end
 	return num
 end
 
+--- @param buf integer
+--- @return integer|nil
 local function get_buf_win(buf)
 	for _, win in ipairs(vim.api.nvim_list_wins()) do
 		if vim.api.nvim_win_get_buf(win) == buf then return win end
@@ -46,6 +81,8 @@ local function get_buf_win(buf)
 end
 
 --- Generates 2-digit sign strings for line numbers
+--- @param line_num integer
+--- @return string[]
 local function get_line_number_signs(line_num)
 	local str = tostring(line_num)
 	local result = {}
@@ -56,16 +93,22 @@ local function get_line_number_signs(line_num)
 	return result
 end
 
+--- @param buf integer
+--- @param extmark integer
+--- @return integer, integer
 local function get_extmark_range(buf, extmark)
 	local result = vim.api.nvim_buf_get_extmark_by_id(buf, M.multibuf__ns, extmark, { details = true })
 	if not result or not result[1] then return 0, 0 end
 	return result[1], result[3].end_row
 end
 
+--- @return string[]
 local function create_multibuf_header()
 	return { " ─────── " }
 end
 
+--- @param bufnr integer
+--- @return any[]
 local function render_multibuf_title(bufnr)
 	if M.user_opts.render_multibuf_title then
 		local success, lines_or_error = pcall(M.user_opts.render_multibuf_title, bufnr)
@@ -75,6 +118,8 @@ local function render_multibuf_title(bufnr)
 	return M.default_render_multibuf_title(bufnr)
 end
 
+--- @param opts multibuffer.RenderExpandLinesOptions
+--- @return any[]
 local function render_expand_lines(opts)
 	if M.user_opts.render_expand_lines then
 		local success, lines_or_error = pcall(M.user_opts.render_expand_lines, opts)
@@ -84,6 +129,7 @@ local function render_expand_lines(opts)
 	return M.default_render_expand_lines(opts)
 end
 
+--- @param args table
 local function multibuf_buf_changed(args)
 	local listener_info = buf_listeners[args.buf]
 	if listener_info then
@@ -95,6 +141,9 @@ end
 
 -- ──────── Structural Rendering ────────
 
+--- @param multibuf integer
+--- @param target_row integer
+--- @param source_row integer
 local function place_line_number_signs(multibuf, target_row, source_row)
 	local signs = get_line_number_signs(source_row + 1)
 	for digit_idx, text in ipairs(signs) do
@@ -113,6 +162,9 @@ local function place_line_number_signs(multibuf, target_row, source_row)
 	})
 end
 
+--- @param multibuf integer
+--- @param target_row integer
+--- @param opts multibuffer.RenderExpandLinesOptions
 local function place_expander(multibuf, target_row, opts)
 	vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
 		virt_lines = render_expand_lines(opts),
@@ -125,7 +177,11 @@ end
 -- ──────── Highlight Projection (Live UI Mirroring) ────────
 
 --- Projects highlights from source to multibuffer using ephemeral extmarks.
---- This is called during the redraw cycle (on_win).
+--- @param multibuf integer
+--- @param source_buf integer
+--- @param s_start integer 0-indexed start line in source
+--- @param s_end integer 0-indexed end line in source
+--- @param target_start integer 0-indexed start line in multibuffer
 local function project_highlights(multibuf, source_buf, s_start, s_end, target_start)
 	-- 1. Project Treesitter Highlights
 	local ft = vim.api.nvim_get_option_value("filetype", { buf = source_buf })
@@ -133,7 +189,7 @@ local function project_highlights(multibuf, source_buf, s_start, s_end, target_s
 	
 	if lang and pcall(vim.treesitter.language.add, lang) then
 		pcall(function()
-			-- Use { error = false } to prevent hard crashes in recent Nvim versions
+			-- Use { error = false } to prevent hard crashes
 			local parser = vim.treesitter.get_parser(source_buf, lang, { error = false })
 			if not parser then return end
 
@@ -172,6 +228,7 @@ end
 
 -- ──────── Core Multibuffer Management ────────
 
+--- @param multibuf integer
 function M.multibuf_reload(multibuf)
 	local info = multibufs[multibuf]
 	if not info then return end
@@ -233,6 +290,7 @@ function M.multibuf_reload(multibuf)
 	if win and cursor_pos then vim.api.nvim_win_set_cursor(win, cursor_pos) end
 end
 
+--- @param opts MultibufSetupOptions
 function M.setup(opts)
 	M.user_opts = vim.tbl_deep_extend('force', M.user_opts, opts)
 	M.multibuf__ns = vim.api.nvim_create_namespace("Multibuf")
@@ -241,9 +299,7 @@ function M.setup(opts)
 	-- Decoration provider mirrors source highlights into the multibuffer viewport
 	vim.api.nvim_set_decoration_provider(M.multibuf_hl_ns, {
 		on_win = function(_, _, multibuf, top, bot)
-			-- Safety: skip if this isn't a known multibuffer
 			if not M.multibuf_is_valid(multibuf) then return false end
-			
 			local info = multibufs[multibuf]
 			if not info then return false end
 
@@ -260,7 +316,6 @@ function M.setup(opts)
 								local s_range_start = s_start + (v_start - r_start)
 								local s_range_end = s_range_start + (v_end - v_start)
 								
-								-- Only project if source buffer has a valid Treesitter language
 								local s_ft = vim.api.nvim_get_option_value("filetype", { buf = b_info.buf })
 								local s_lang = vim.treesitter.language.get_lang(s_ft)
 								if s_lang then
@@ -278,7 +333,6 @@ function M.setup(opts)
 	vim.api.nvim_create_autocmd({"BufReadCmd", "BufWriteCmd"}, {
 		pattern = "multibuffer://*",
 		callback = function(args) 
-			-- Prevent automatic TS attachment which causes errors on these composite buffers
 			pcall(vim.treesitter.stop, args.buf)
 			M.multibuf_reload(args.buf) 
 		end,
@@ -288,8 +342,9 @@ function M.setup(opts)
 	})
 end
 
--- ──────── Boilerplate / Legacy Mappings ────────
+-- ──────── Public API ────────
 
+--- @return integer bufnr
 function M.create_multibuf()
 	local id = vim.api.nvim_create_buf(true, false)
 	local info = { bufs = {} }
@@ -301,10 +356,16 @@ function M.create_multibuf()
 	return id
 end
 
+--- @param buf integer
+--- @return boolean
 function M.multibuf_is_valid(buf) return multibufs[buf] ~= nil end
 
+--- @param mb integer
+--- @param opts MultibufAddBufOptions
 function M.multibuf_add_buf(mb, opts) M.multibuf_add_bufs(mb, { opts }) end
 
+--- @param mb integer
+--- @param opts_list MultibufAddBufOptions[]
 function M.multibuf_add_bufs(mb, opts_list)
 	local info = multibufs[mb]
 	for _, opts in ipairs(opts_list) do
@@ -334,8 +395,11 @@ function M.multibuf_add_bufs(mb, opts_list)
 	M.multibuf_reload(mb)
 end
 
+--- @param win integer window handle
+--- @param mb integer multibuffer handle
 function M.win_set_multibuf(win, mb) vim.api.nvim_win_set_buf(win, mb) end
 
+--- @param buf integer
 function M.multibuf__wipeout(buf)
 	multibufs[buf] = nil
 	if buf_listeners[buf] then
@@ -344,6 +408,9 @@ function M.multibuf__wipeout(buf)
 	end
 end
 
+--- @param mb integer
+--- @param line integer 0-indexed line in multibuffer
+--- @return integer|nil bufnr, integer|nil source_line
 function M.multibuf_get_buf_at_line(mb, line)
 	local info = multibufs[mb]
 	local marks = vim.api.nvim_buf_get_extmarks(mb, M.multibuf__ns, {line, 0}, {line, -1}, {details = true, overlap = true})
@@ -360,10 +427,14 @@ function M.multibuf_get_buf_at_line(mb, line)
 	end
 end
 
-function M.default_render_multibuf_title(buf)
-	return { {{""}}, {{ " " .. vim.api.nvim_buf_get_name(buf) .. "  ", "TabLine" }}, {{""}} }
+--- @param bufnr integer
+--- @return any[]
+function M.default_render_multibuf_title(bufnr)
+	return { {{""}}, {{ " " .. vim.api.nvim_buf_get_name(bufnr) .. "  ", "TabLine" }}, {{""}} }
 end
 
+--- @param opts multibuffer.RenderExpandLinesOptions
+--- @return any[]
 function M.default_render_expand_lines(opts)
 	if opts.count <= 0 then return {} end
 	local icons = { above = "↑", below = "↓", both = "↕" }
