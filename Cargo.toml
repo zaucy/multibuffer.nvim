@@ -1,0 +1,16 @@
+[package]
+name = "multibuffer"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "multibuffer"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "multibuffer-test"
+path = "src/main.rs"
+
+[dependencies]
+nvim-oxi = { version = "0.6.0", features = ["neovim-nightly", "test"] }
+serde = { version = "1.0", features = ["derive"] }
