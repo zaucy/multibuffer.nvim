@@ -123,26 +123,51 @@ Create a multibuffer from all results in a [Telescope](https://github.com/nvim-t
 
 ```lua
 -- Inside your telescope setup mappings
-["<C-a>"] = function(prompt_bufnr)
-	local action_state = require("telescope.actions.state")
-	local mbuf = require("multibuffer")
-	local picker = action_state.get_current_picker(prompt_bufnr)
-	
-	local multibuf = mbuf.create_multibuf()
-	local add_opts = {}
-	
-	for entry in picker.manager:iter() do
-		local bufnr = entry.bufnr or vim.fn.bufadd(entry.filename)
-		vim.fn.bufload(bufnr)
-		
-		table.insert(add_opts, {
-			buf = bufnr,
-			regions = { { start_row = (entry.lnum or 1) - 1, end_row = (entry.lnum or 1) - 1 } }
-		})
-	end
-	
-	require("telescope.actions").close(prompt_bufnr)
-	mbuf.multibuf_add_bufs(multibuf, add_opts)
-	mbuf.win_set_multibuf(0, multibuf)
-end
+mappings = {
+	i = {
+		["<C-a>"] = function(prompt_bufnr)
+			local actions = require("telescope.actions")
+			local action_state = require("telescope.actions.state")
+			local multibuffer = require("multibuffer")
+			local picker = action_state.get_current_picker(prompt_bufnr)
+			local selections = {}
+			for entry in picker.manager:iter() do
+				local bufnr = entry.bufnr
+				if bufnr == nil then
+					bufnr = vim.fn.bufadd(entry.filename)
+					vim.fn.bufload(bufnr)
+				end
+				table.insert(selections, {
+					filename = entry.filename,
+					bufnr = bufnr,
+					start_row = (entry.lnum or 1) - 1,
+				})
+			end
+			actions.close(prompt_bufnr)
+
+			local multibuf = multibuffer.create_multibuf()
+			--- @type table<number, MultibufAddBufOptions>
+			local add_opts_by_buf = {}
+			for _, selection in ipairs(selections) do
+				if add_opts_by_buf[selection.bufnr] == nil then
+					add_opts_by_buf[selection.bufnr] = {
+						buf = selection.bufnr,
+						regions = {},
+					}
+				end
+				table.insert(add_opts_by_buf[selection.bufnr].regions, {
+					start_row = selection.start_row - telescope_multibuffer_expand,
+					end_row = selection.start_row + telescope_multibuffer_expand,
+				})
+			end
+			--- @type MultibufAddBufOptions[]
+			local add_buf_opts = {}
+			for _, add_opts in pairs(add_opts_by_buf) do
+				table.insert(add_buf_opts, add_opts)
+			end
+			multibuffer.multibuf_add_bufs(multibuf, add_buf_opts)
+			multibuffer.win_set_multibuf(0, multibuf)
+		end,
+	},
+},
 ```
