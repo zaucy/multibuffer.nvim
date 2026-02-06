@@ -14,6 +14,7 @@
 
 --- @class MultibufInfo
 --- @field bufs MultibufBufInfo[] Info about included buffers
+--- @field header string[]? Custom header lines
 
 --- @class MultibufBufListener
 --- @field multibufs integer[] List of multibuffers listening to this source
@@ -275,7 +276,7 @@ function M.multibuf_reload(multibuf)
 
 	vim.api.nvim_buf_clear_namespace(multibuf, M.multibuf__ns, 0, -1)
 
-	local header = create_multibuf_header()
+	local header = info.header or create_multibuf_header()
 	local all_lines = { unpack(header) }
 	local virt_name_indices = {}
 	local virt_expand_lnums = {}
@@ -406,17 +407,30 @@ end
 -- ──────── Public API ────────
 
 --- @return integer bufnr
-function M.create_multibuf()
+function M.create_multibuf(opts)
+	opts = opts or {}
+	vim.validate("opts.header", opts.header, { "table", "nil" })
+
 	local id = vim.api.nvim_create_buf(true, false)
-	local info = { bufs = {} }
+	local header = opts.header or create_multibuf_header()
+	local info = { bufs = {}, header = header }
 	vim.api.nvim_buf_set_name(id, "multibuffer://" .. id)
 	vim.api.nvim_set_option_value("buftype", "acwrite", { buf = id })
 	vim.api.nvim_set_option_value("filetype", "multibuffer", { buf = id })
-	local header = create_multibuf_header()
-	vim.api.nvim_buf_set_lines(id, 0, #header, true, header)
 	vim.api.nvim_set_option_value("modifiable", false, { buf = id })
 	multibufs[id] = info
 	return id
+end
+
+--- @param mb integer
+--- @param header string[]
+function M.multibuf_set_header(mb, header)
+	local info = multibufs[mb]
+	if not info then
+		return
+	end
+	info.header = header
+	M.multibuf_reload(mb)
 end
 
 --- @param buf integer
