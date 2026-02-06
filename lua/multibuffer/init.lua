@@ -100,22 +100,13 @@ end
 
 --- @return string[]
 local function get_line_number_signs(line_num)
-	local digits = {}
+	local str = tostring(line_num)
 	local result = {}
-
-	for digit in tostring(line_num):gmatch("%d") do
-		table.insert(digits, tonumber(digit))
+	-- Split into 2-character chunks from the right
+	for i = #str, 1, -2 do
+		local start = math.max(1, i - 1)
+		table.insert(result, 1, str:sub(start, i))
 	end
-
-	for i = #digits, 2, -2 do
-		local two_digit = digits[i - 1] .. digits[i]
-		table.insert(result, 1, "MutlibufferDigit" .. two_digit)
-	end
-
-	if #digits % 2 == 1 then
-		table.insert(result, 1, "MutlibufferDigit" .. digits[1])
-	end
-
 	return result
 end
 
@@ -357,170 +348,100 @@ function M.multibuf_reload(multibuf)
 		cursor_pos = vim.api.nvim_win_get_cursor(win)
 	end
 
-	vim.fn.sign_unplace("", { buffer = multibuf })
+	-- Efficiently clear all previous extmarks (including signs) in our namespace
+	vim.api.nvim_buf_clear_namespace(multibuf, M.multibuf__ns, 0, -1)
 
 	local all_lines = create_multibuf_header()
 	local header_length = #all_lines
 	local virt_name_indices = {}
 	local virt_expand_lnums = {}
 
+	-- Build the buffer content and track where slices start
 	for _, buf_info in ipairs(multibuf_info.bufs) do
 		table.insert(virt_name_indices, #all_lines)
 		for _, source_extmark_id in ipairs(buf_info.source_extmark_ids) do
-			local result    = vim.api.nvim_buf_get_extmark_by_id(
-				buf_info.buf,
-				M.multibuf__ns,
-				source_extmark_id,
-				{ details = true }
-			)
-
-			local start_row = result[1]
-			local details   = result[3]
-			assert(details ~= nil, "no extmark details")
-			local end_row = details.end_row
-			assert(end_row ~= nil, "bad end_row")
-			assert(start_row >= 0, string.format("bad start row %i", start_row))
-			assert(end_row > start_row, string.format("bad end row %i (start row is %i)", end_row, start_row))
+			local start_row, end_row = get_extmark_range(buf_info.buf, source_extmark_id)
 			local lines = vim.api.nvim_buf_get_lines(buf_info.buf, start_row, end_row, true)
-			assert(#lines > 0)
-
 			table.insert(virt_expand_lnums, #all_lines)
 			vim.list_extend(all_lines, lines)
 		end
 	end
-
 	table.insert(virt_expand_lnums, #all_lines)
-	vim.api.nvim_buf_set_lines(multibuf, 0, vim.api.nvim_buf_line_count(multibuf), true, all_lines)
 
-	assert(#multibuf_info.bufs == #virt_name_indices)
+	-- Update buffer content in a single call
+	vim.api.nvim_buf_set_lines(multibuf, 0, -1, true, all_lines)
 
-	for index, buf_info in ipairs(multibuf_info.bufs) do
-		local virt_name_index = virt_name_indices[index]
-		buf_info.virt_name_extmark_id = vim.api.nvim_buf_set_extmark(
-			multibuf,
-			M.multibuf__ns,
-			virt_name_index,
-			0,
-			{
-				id = buf_info.virt_name_extmark_id,
-				virt_lines = render_multibuf_title(buf_info.buf),
+	-- Place titles, signs, and expanders
+	local current_lnum = header_length
+	local virt_expand_index = 1
+
+	for buf_idx, buf_info in ipairs(multibuf_info.bufs) do
+		-- Set Buffer Title
+		vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, virt_name_indices[buf_idx], 0, {
+			virt_lines = render_multibuf_title(buf_info.buf),
+			virt_lines_above = true,
+			virt_lines_leftcol = true,
+			priority = 20001,
+		})
+
+		local last_end_row = 0
+		for slice_idx, source_extmark_id in ipairs(buf_info.source_extmark_ids) do
+			local start_row, end_row = get_extmark_range(buf_info.buf, source_extmark_id)
+			local slice_len = end_row - start_row
+
+			-- Place Line Number Signs using Extmarks
+			for i = 0, slice_len - 1 do
+				local abs_lnum = start_row + i + 1
+				local signs = get_line_number_signs(abs_lnum)
+				local target_row = current_lnum + i
+
+				for digit_idx, sign_text in ipairs(signs) do
+					-- Map sign names back to text if needed, or just use text if we refactor get_line_number_signs
+					-- For now, let's assume we use the text directly for performance
+					local text = sign_text:match("Digit(%d+)") or (sign_text == "MutlibufferDigitSpacer" and " " or sign_text)
+					if text:match("^%d$") then text = " " .. text end -- Pad single digits
+
+					vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
+						sign_text = text,
+						sign_hl_group = "LineNr",
+						priority = 100 - digit_idx,
+					})
+				end
+				-- Spacer sign
+				vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
+					sign_text = " ",
+					sign_hl_group = "LineNr",
+					priority = 10,
+				})
+			end
+
+			-- Set Expander
+			local expand_direction = (slice_idx == 1) and "above" or "both"
+			vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, virt_expand_lnums[virt_expand_index], 0, {
+				virt_lines = render_expand_lines({
+					expand_direction = expand_direction,
+					count = start_row - last_end_row,
+					window = win or 0,
+				}),
 				virt_lines_above = true,
 				virt_lines_leftcol = true,
-				strict = true,
 				priority = 20001,
-			}
-		)
-	end
-
-	local lnum = header_length
-	local virt_expand_index = 1
-	for _, buf_info in ipairs(multibuf_info.bufs) do
-		local last_end_row = 0
-		for source_extmark_id_index, source_extmark_id in ipairs(buf_info.source_extmark_ids) do
-			local start_row, end_row = get_extmark_range(buf_info.buf, source_extmark_id)
-
-			for line_index = start_row, end_row - 1 do
-				local signs = get_line_number_signs(line_index + 1)
-				lnum = lnum + 1
-				for digit_index, sign in ipairs(signs) do
-					local group = "___MultibufferDigitGroup" .. digit_index
-					local priority = 11 + ((digit_index - 10) * -1)
-					vim.fn.sign_place(0, group, sign, multibuf, { lnum = lnum, priority = priority })
-				end
-
-				vim.fn.sign_place(0, "___MultibufferDigitGroup100Space", "MutlibufferDigitSpacer", multibuf,
-					{ lnum = lnum, priority = 9 })
-			end
-
-			--- @type "above"|"below"|"both"
-			local expand_direction = "both"
-			if source_extmark_id_index == 1 then
-				expand_direction = "above"
-			end
-
-			local virt_expand_lnum = virt_expand_lnums[virt_expand_index]
-			local expand_render_lines = render_expand_lines({
-				expand_direction = expand_direction,
-				count = start_row - last_end_row,
-				window = win or 0,
 			})
-			buf_info.virt_expand_extmark_ids[source_extmark_id_index] = vim.api.nvim_buf_set_extmark(
-				multibuf,
-				M.multibuf__ns,
-				virt_expand_lnum,
-				0,
-				{
-					id = buf_info.virt_expand_extmark_ids[source_extmark_id_index],
-					virt_lines = expand_render_lines,
-					virt_lines_above = true,
-					virt_lines_leftcol = true,
-					strict = true,
-					priority = 20001,
-				}
-			)
 
+			-- Track regions for mapping
+			buf_info.region_extmark_ids[slice_idx] = vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, current_lnum, 0, {
+				end_row = current_lnum + slice_len,
+				end_right_gravity = true,
+			})
+
+			current_lnum = current_lnum + slice_len
 			last_end_row = end_row
 			virt_expand_index = virt_expand_index + 1
-		end
-
-		-- TODO: need to add below expander
-		-- local virt_expand_lnum = virt_expand_lnums[virt_expand_index]
-		-- local expand_render_lines = render_expand_lines({
-		-- 	expand_direction = "below",
-		-- 	count = 1,
-		-- 	window = win or 0,
-		-- })
-		-- buf_info.virt_expand_extmark_ids[#buf_info.source_extmark_ids] = vim.api.nvim_buf_set_extmark(
-		-- 	multibuf,
-		-- 	M.multibuf__ns,
-		-- 	virt_expand_lnum,
-		-- 	0,
-		-- 	{
-		-- 		id = buf_info.virt_expand_extmark_ids[#buf_info.source_extmark_ids],
-		-- 		virt_lines = expand_render_lines,
-		-- 		virt_lines_above = true,
-		-- 		virt_lines_leftcol = true,
-		-- 		strict = true,
-		-- 		priority = 20001,
-		-- 	}
-		-- )
-	end
-
-
-	local current_multibuf_line_index = header_length
-	for _, buf_info in ipairs(multibuf_info.bufs) do
-		for i, source_extmark in ipairs(buf_info.source_extmark_ids) do
-			local source_start_row, source_end_row = get_extmark_range(buf_info.buf, source_extmark)
-			local source_length = source_end_row - source_start_row
-
-			buf_info.region_extmark_ids[i] = vim.api.nvim_buf_set_extmark(
-				multibuf,
-				M.multibuf__ns,
-				current_multibuf_line_index,
-				0,
-				{
-					id = buf_info.region_extmark_ids[i],
-					end_row = current_multibuf_line_index + source_length,
-					end_right_gravity = true,
-				}
-			)
-
-			current_multibuf_line_index = current_multibuf_line_index + source_length
-		end
-	end
-
-
-	for _, buf_info in ipairs(multibuf_info.bufs) do
-		while #buf_info.region_extmark_ids > #buf_info.source_extmark_ids do
-			local old_extmark = table.remove(buf_info.region_extmark_ids, #buf_info.region_extmark_ids)
-			vim.api.nvim_buf_del_extmark(multibuf, M.multibuf__ns, old_extmark)
 		end
 	end
 
 	vim.api.nvim_set_option_value("modified", false, { buf = multibuf })
-
-	if win ~= nil then
-		assert(cursor_pos ~= nil)
+	if win ~= nil and cursor_pos then
 		vim.api.nvim_win_set_cursor(win, cursor_pos)
 	end
 end
@@ -613,18 +534,6 @@ end
 function M.setup(opts)
 	M.user_opts = vim.tbl_deep_extend('force', M.user_opts, opts)
 	M.multibuf__ns = vim.api.nvim_create_namespace("Multibuf")
-
-	for i = 0, 9 do
-		vim.fn.sign_define("MutlibufferDigit" .. tostring(i), { text = " " .. tostring(i), texthl = "LineNr" })
-		vim.fn.sign_define("MutlibufferDigit0" .. tostring(i), { text = "0" .. tostring(i), texthl = "LineNr" })
-	end
-
-	for i = 10, 99 do
-		vim.fn.sign_define("MutlibufferDigit" .. tostring(i), { text = tostring(i), texthl = "LineNr" })
-	end
-
-	-- NOTE: in the future this spacer should be reserved for some plugin like gitsigns or others that want to show their signs in the multibuf
-	vim.fn.sign_define("MutlibufferDigitSpacer", { text = " ", texthl = "LineNr" })
 
 	vim.api.nvim_create_autocmd("BufWriteCmd", {
 		pattern = "multibuffer://*",
