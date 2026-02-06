@@ -210,17 +210,36 @@ local function project_highlights(multibuf, source_buf, s_start, s_end, target_s
 				if not query then
 					return
 				end
+
+				-- Cache multibuffer lines for column clamping (performance)
+				local mb_lines =
+					vim.api.nvim_buf_get_lines(multibuf, target_start, target_start + (s_end - s_start), false)
+
 				for id, node, metadata in query:iter_captures(tstree:root(), source_buf, s_start, s_end) do
 					local sr, sc, er, ec = node:range()
+
+					-- Map coordinates to multibuffer
 					local tr = target_start + (sr - s_start)
 					local ter = target_start + (er - s_start)
-					vim.api.nvim_buf_set_extmark(multibuf, M.multibuf_hl_ns, tr, sc, {
-						end_row = ter,
-						end_col = ec,
-						hl_group = "@" .. query.captures[id] .. "." .. tlang,
-						priority = tonumber(metadata.priority) or 100,
-						ephemeral = true,
-					})
+
+					-- Safety: Ensure we don't project outside the target slice or buffer
+					if tr >= target_start then
+						-- Column Clamping: Neovim errors if end_col > line_length
+						local line_idx = tr - target_start
+						local target_line = mb_lines[line_idx + 1] or ""
+						local max_col = #target_line
+
+						local safe_sc = math.min(sc, max_col)
+						local safe_ec = ec and math.min(ec, max_col)
+
+						pcall(vim.api.nvim_buf_set_extmark, multibuf, M.multibuf_hl_ns, tr, safe_sc, {
+							end_row = ter,
+							end_col = safe_ec,
+							hl_group = "@" .. query.captures[id] .. "." .. tlang,
+							priority = tonumber(metadata.priority) or 100,
+							ephemeral = true,
+						})
+					end
 				end
 			end)
 		end)
@@ -233,8 +252,12 @@ local function project_highlights(multibuf, source_buf, s_start, s_end, target_s
 		if d.ns_id ~= M.multibuf__ns then
 			local tr = target_start + (r - s_start)
 			local ter = d.end_row and (target_start + (d.end_row - s_start))
-			d.id, d.ns_id, d.end_row, d.ephemeral = nil, nil, ter, true
-			pcall(vim.api.nvim_buf_set_extmark, multibuf, M.multibuf_hl_ns, tr, c, d)
+
+			-- Only project if it falls within our target range
+			if tr >= target_start then
+				d.id, d.ns_id, d.end_row, d.ephemeral = nil, nil, ter, true
+				pcall(vim.api.nvim_buf_set_extmark, multibuf, M.multibuf_hl_ns, tr, c, d)
+			end
 		end
 	end
 end
@@ -343,7 +366,7 @@ function M.setup(opts)
 							local r_start, r_end = get_extmark_range(multibuf, reg_id)
 							local s_start, _ = get_extmark_range(b_info.buf, b_info.source_extmark_ids[i])
 
-							local v_start, v_end = math.max(top, r_start), math.min(bot, r_end)
+							local v_start, v_end = math.max(top, r_start), math.min(bot + 1, r_end)
 							if v_start < v_end then
 								local s_range_start = s_start + (v_start - r_start)
 								local s_range_end = s_range_start + (v_end - v_start)
