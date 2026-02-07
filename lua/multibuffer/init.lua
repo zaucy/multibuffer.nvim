@@ -464,6 +464,10 @@ function M.multibuf_reload(multibuf)
 	end
 	local win = get_buf_win(multibuf)
 	local cursor_pos = win and vim.api.nvim_win_get_cursor(win)
+	local source_buf, source_line
+	if win then
+		source_buf, source_line = M.multibuf_get_buf_at_line(multibuf, cursor_pos[1] - 1)
+	end
 
 	vim.api.nvim_buf_clear_namespace(multibuf, M.multibuf__ns, 0, -1)
 
@@ -564,7 +568,19 @@ function M.multibuf_reload(multibuf)
 
 	vim.api.nvim_set_option_value("modified", false, { buf = multibuf })
 	if win and cursor_pos then
-		vim.api.nvim_win_set_cursor(win, cursor_pos)
+		local new_line
+		if source_buf and source_line then
+			new_line = M.multibuf_buf_get_line(multibuf, source_buf, source_line)
+		end
+
+		if new_line then
+			vim.api.nvim_win_set_cursor(win, { new_line + 1, cursor_pos[2] })
+		else
+			-- fallback to old absolute pos, clamped
+			local line_count = vim.api.nvim_buf_line_count(multibuf)
+			local target_line = math.min(cursor_pos[1], line_count)
+			vim.api.nvim_win_set_cursor(win, { target_line, cursor_pos[2] })
+		end
 	end
 end
 
@@ -782,11 +798,13 @@ function M.multibuf_get_buf_at_line(mb, line)
 				if m[1] == rid then
 					local rs, _ = get_extmark_range(mb, rid)
 					local sid = b.source_extmark_ids[i]
-					if not sid then
-						return b.buf, nil
+					if sid then
+						local ss, _ = get_extmark_range(b.buf, sid)
+						return b.buf, ss + (line - rs)
+					elseif b.pending_regions and b.pending_regions[i] then
+						return b.buf, b.pending_regions[i].start_row + (line - rs)
 					end
-					local ss, _ = get_extmark_range(b.buf, sid)
-					return b.buf, ss + (line - rs)
+					return b.buf, nil
 				end
 			end
 		end
@@ -812,21 +830,39 @@ function M.multibuf_buf_get_line(mb, bufnr, lnum)
 	end
 	for _, b in ipairs(info.bufs) do
 		if b.buf == bufnr then
-			for i, source_id in ipairs(b.source_extmark_ids) do
-				local ss, se = get_extmark_range(bufnr, source_id)
-				local region_id = b.region_extmark_ids[i]
-				if not region_id then
-					goto continue
-				end
+			if b.pending_regions then
+				for i, region in ipairs(b.pending_regions) do
+					local region_id = b.region_extmark_ids[i]
+					if not region_id then
+						goto continue
+					end
 
-				if lnum == nil then
-					local ts, _ = get_extmark_range(mb, region_id)
-					return ts
-				elseif lnum >= ss and lnum < se then
-					local ts, _ = get_extmark_range(mb, region_id)
-					return ts + (lnum - ss)
+					if lnum == nil then
+						local ts, _ = get_extmark_range(mb, region_id)
+						return ts
+					elseif lnum >= region.start_row and lnum <= region.end_row then
+						local ts, _ = get_extmark_range(mb, region_id)
+						return ts + (lnum - region.start_row)
+					end
+					::continue::
 				end
-				::continue::
+			else
+				for i, source_id in ipairs(b.source_extmark_ids) do
+					local ss, se = get_extmark_range(bufnr, source_id)
+					local region_id = b.region_extmark_ids[i]
+					if not region_id then
+						goto continue
+					end
+
+					if lnum == nil then
+						local ts, _ = get_extmark_range(mb, region_id)
+						return ts
+					elseif lnum >= ss and lnum < se then
+						local ts, _ = get_extmark_range(mb, region_id)
+						return ts + (lnum - ss)
+					end
+					::continue::
+				end
 			end
 		end
 	end
