@@ -158,8 +158,12 @@ end
 --- @param buf integer
 --- @return integer|nil
 local function get_buf_win(buf)
+	local cur_win = vim.api.nvim_get_current_win()
+	if vim.api.nvim_win_get_buf(cur_win) == buf then
+		return cur_win
+	end
 	for _, win in ipairs(vim.api.nvim_list_wins()) do
-		if vim.api.nvim_win_get_buf(win) == buf then
+		if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
 			return win
 		end
 	end
@@ -882,10 +886,16 @@ end
 --- @param delta_bot integer lines to expand downwards (negative to shrink)
 --- @param line integer|nil optional 0-indexed line number in multibuffer, defaults to cursor line
 function M.multibuf_slice_expand(mb, delta_top, delta_bot, line)
-	vim.validate("mb", mb, "number")
+	vim.validate("mb", mb, function(v)
+		return M.multibuf_is_valid(v), "valid multibuffer handle"
+	end)
 	vim.validate("delta_top", delta_top, "number")
 	vim.validate("delta_bot", delta_bot, "number")
 	vim.validate("line", line, { "number", "nil" })
+
+	if delta_top == 0 and delta_bot == 0 then
+		return
+	end
 
 	local win = get_buf_win(mb)
 	local source_buf, source_line
