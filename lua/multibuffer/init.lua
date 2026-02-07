@@ -170,15 +170,47 @@ local function get_buf_win(buf)
 	return nil
 end
 
+--- @param win integer|nil
+--- @return integer
+local function get_signcolumn_width(win)
+	local sc
+	if win and vim.api.nvim_win_is_valid(win) then
+		sc = vim.api.nvim_get_option_value("signcolumn", { win = win })
+	else
+		sc = vim.api.nvim_get_option_value("signcolumn", { scope = "global" })
+	end
+
+	if sc == "no" then
+		return 0
+	end
+
+	local width_str = sc:match(":(%d+)$")
+	if width_str then
+		return tonumber(width_str)
+	end
+
+	return 1
+end
+
 --- Generates 2-digit sign strings for line numbers
 --- @param line_num integer
+--- @param width_columns integer
 --- @return string[]
-local function get_line_number_signs(line_num)
+local function get_line_number_signs(line_num, width_columns)
 	local str = tostring(line_num)
+	local width_cells = width_columns * 2
+	if #str < width_cells then
+		str = str .. " "
+	end
+
 	local result = {}
 	for i = #str, 1, -2 do
 		local start = math.max(1, i - 1)
-		table.insert(result, 1, str:sub(start, i))
+		local chunk = str:sub(start, i)
+		if #chunk == 1 then
+			chunk = " " .. chunk
+		end
+		table.insert(result, 1, chunk)
 	end
 	return result
 end
@@ -356,12 +388,15 @@ end
 --- @param multibuf integer
 --- @param target_row integer
 --- @param source_row integer
-local function place_line_number_signs(multibuf, target_row, source_row)
-	local signs = get_line_number_signs(source_row + 1)
+--- @param width integer?
+local function place_line_number_signs(multibuf, target_row, source_row, width)
+	local signs = get_line_number_signs(source_row + 1, width or 1)
+	if width then
+		while #signs < width do
+			table.insert(signs, 1, "  ")
+		end
+	end
 	for digit_idx, text in ipairs(signs) do
-		if #text == 1 then
-			text = " " .. text
-		end -- Pad single digits
 		vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
 			sign_text = text,
 			sign_hl_group = "LineNr",
@@ -481,6 +516,7 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 		return
 	end
 	local win = get_buf_win(multibuf)
+	local sc_width = get_signcolumn_width(win)
 	local cursor_pos = win and vim.api.nvim_win_get_cursor(win)
 	local source_buf, source_line
 	if win then
@@ -564,7 +600,7 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 				for s_idx, region in ipairs(buf_info.pending_regions) do
 					local slice_len = (region.end_row - region.start_row) + 1
 					for i = 0, slice_len - 1 do
-						place_line_number_signs(multibuf, current_lnum + i, region.start_row + i)
+						place_line_number_signs(multibuf, current_lnum + i, region.start_row + i, sc_width)
 					end
 
 					place_expander(multibuf, virt_expand_lnums[virt_expand_idx], {
@@ -591,7 +627,7 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 						local slice_len = s_end - s_start
 
 						for i = 0, slice_len - 1 do
-							place_line_number_signs(multibuf, current_lnum + i, s_start + i)
+							place_line_number_signs(multibuf, current_lnum + i, s_start + i, sc_width)
 						end
 
 						place_expander(multibuf, virt_expand_lnums[virt_expand_idx], {
