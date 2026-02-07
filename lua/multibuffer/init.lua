@@ -92,10 +92,7 @@ local function load_source_buf(mb, buf_info)
 		return false
 	end
 
-	-- local old_ei = vim.api.nvim_get_option_value("eventignore", {})
-	-- vim.api.nvim_set_option_value("eventignore", "all", {})
 	vim.fn.bufload(buf)
-	-- vim.api.nvim_set_option_value("eventignore", old_ei, {})
 
 	local line_count = vim.api.nvim_buf_line_count(buf)
 	local regions = buf_info.pending_regions or {}
