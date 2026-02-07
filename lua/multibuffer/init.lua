@@ -25,11 +25,14 @@
 --- @class MultibufSetupOptions
 --- @field render_multibuf_title (fun(bufnr: integer): any[])? Custom title renderer
 --- @field render_expand_lines (fun(opts: multibuffer.RenderExpandLinesOptions): any[])? Custom expander renderer
+--- @field expander_max_lines integer? Max lines to show as dimmed text in expander
 
 --- @class multibuffer.RenderExpandLinesOptions
 --- @field expand_direction "above"|"below"|"both"
 --- @field count integer Number of hidden lines
 --- @field window integer Window handle
+--- @field bufnr integer Buffer handle
+--- @field start_row integer 0-indexed start row of hidden lines
 
 --- @type table<integer, MultibufInfo>
 local multibufs = {}
@@ -192,6 +195,26 @@ local function create_multibuf_header()
 	return { " ─────── " }
 end
 
+--- @param s string
+--- @param tabstop integer
+--- @return string
+local function expand_tabs(s, tabstop)
+	local result = ""
+	local col = 0
+	for i = 1, #s do
+		local char = s:sub(i, i)
+		if char == "\t" then
+			local spaces = tabstop - (col % tabstop)
+			result = result .. string.rep(" ", spaces)
+			col = col + spaces
+		else
+			result = result .. char
+			col = col + 1
+		end
+	end
+	return result
+end
+
 --- @param bufnr integer
 --- @return any[]
 local function render_multibuf_title(bufnr)
@@ -235,12 +258,6 @@ local function place_line_number_signs(multibuf, target_row, source_row)
 			priority = 100 - digit_idx,
 		})
 	end
-	-- Spacer sign for gutter padding
-	vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
-		sign_text = " ",
-		sign_hl_group = "LineNr",
-		priority = 10,
-	})
 end
 
 --- @param multibuf integer
@@ -402,6 +419,8 @@ function M.multibuf_reload(multibuf)
 					expand_direction = (s_idx == 1) and "above" or "both",
 					count = region.start_row - last_s_end,
 					window = win or 0,
+					bufnr = buf_info.buf,
+					start_row = last_s_end,
 				})
 
 				buf_info.region_extmark_ids[s_idx] =
@@ -426,6 +445,8 @@ function M.multibuf_reload(multibuf)
 					expand_direction = (s_idx == 1) and "above" or "both",
 					count = s_start - last_s_end,
 					window = win or 0,
+					bufnr = buf_info.buf,
+					start_row = last_s_end,
 				})
 
 				buf_info.region_extmark_ids[s_idx] =
@@ -723,6 +744,31 @@ function M.default_render_expand_lines(opts)
 	if opts.count <= 0 then
 		return {}
 	end
+
+	local multibuf = vim.api.nvim_win_get_buf(opts.window)
+	local max_lines = vim.b[multibuf].multibuffer_expander_max_lines
+		or M.user_opts.expander_max_lines
+		or vim.g.multibuffer_expander_max_lines
+		or 0
+
+	if opts.count <= max_lines then
+		local lines = vim.api.nvim_buf_get_lines(opts.bufnr, opts.start_row, opts.start_row + opts.count, false)
+		local ts = vim.api.nvim_get_option_value("tabstop", { buf = multibuf })
+		local win_info = vim.fn.getwininfo(opts.window)[1]
+		local textoff = win_info and win_info.textoff or 0
+
+		local all_virt_lines = {}
+		for _, line in ipairs(lines) do
+			local chunks = {}
+			if textoff > 0 then
+				table.insert(chunks, { string.rep(" ", textoff), "LineNr" })
+			end
+			table.insert(chunks, { expand_tabs(line, ts), "Comment" })
+			table.insert(all_virt_lines, chunks)
+		end
+		return all_virt_lines
+	end
+
 	local icons = { above = "↑", below = "↓", both = "↕" }
 	local text = string.format(" --- [ %s %i ] ", icons[opts.expand_direction], opts.count)
 	local width = vim.api.nvim_win_get_width(opts.window)
