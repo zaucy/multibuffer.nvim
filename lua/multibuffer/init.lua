@@ -11,6 +11,7 @@
 --- @field source_extmark_ids integer[] IDs of extmarks tracking source regions
 --- @field region_extmark_ids integer[] IDs of extmarks tracking regions in multibuffer
 --- @field virt_expand_extmark_ids integer[] IDs of extmarks for expander UI
+--- @field pending_regions MultibufRegion[]? List of regions to be set up once loaded
 
 --- @class MultibufInfo
 --- @field bufs MultibufBufInfo[] Info about included buffers
@@ -35,16 +36,8 @@ local multibufs = {}
 --- @type table<integer, MultibufBufListener>
 local buf_listeners = {}
 
-local M = {
-	--- @type MultibufSetupOptions
-	user_opts = {},
-	--- @type integer Namespace for structural elements (signs, titles)
-	multibuf__ns = nil,
-	--- @type integer Namespace for live highlight projection
-	multibuf_hl_ns = nil,
-}
-
--- ──────── Helper Functions ────────
+--- @type table<integer, MultibufAddBufOptions[]>
+local pending_adds = {}
 
 --- @param list any[]
 --- @param item any
@@ -68,6 +61,95 @@ local function clamp(num, min, max)
 		return max
 	end
 	return num
+end
+
+local M = {
+	--- @type MultibufSetupOptions
+	user_opts = {},
+	--- @type integer Namespace for structural elements (signs, titles)
+	multibuf__ns = nil,
+	--- @type integer Namespace for live highlight projection
+	multibuf_hl_ns = nil,
+}
+
+--- @param args table
+local function multibuf_buf_changed(args)
+	local listener_info = buf_listeners[args.buf]
+	if listener_info then
+		for _, multibuf in ipairs(listener_info.multibufs) do
+			M.multibuf_reload(multibuf)
+		end
+	end
+end
+
+--- @param mb integer
+--- @param buf_info MultibufBufInfo
+local function load_source_buf(mb, buf_info)
+	local buf = buf_info.buf
+	if vim.api.nvim_buf_is_loaded(buf) and #buf_info.source_extmark_ids > 0 then
+		return false
+	end
+
+	-- local old_ei = vim.api.nvim_get_option_value("eventignore", {})
+	-- vim.api.nvim_set_option_value("eventignore", "all", {})
+	vim.fn.bufload(buf)
+	-- vim.api.nvim_set_option_value("eventignore", old_ei, {})
+
+	local line_count = vim.api.nvim_buf_line_count(buf)
+	local regions = buf_info.pending_regions or {}
+	buf_info.source_extmark_ids = {}
+
+	for _, region in ipairs(regions) do
+		table.insert(
+			buf_info.source_extmark_ids,
+			vim.api.nvim_buf_set_extmark(buf, M.multibuf__ns, clamp(region.start_row, 0, line_count - 1), 0, {
+				end_row = clamp(region.end_row + 1, 0, line_count),
+				end_right_gravity = true,
+			})
+		)
+	end
+	buf_info.pending_regions = nil
+
+	if not buf_listeners[buf] then
+		local id = vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+			buffer = buf,
+			callback = multibuf_buf_changed,
+		})
+		buf_listeners[buf] = { change_autocmd_id = id, multibufs = { mb } }
+	else
+		list_insert_unique(buf_listeners[buf].multibufs, mb)
+	end
+
+	return true
+end
+
+--- @param mb integer
+local function process_pending_adds(mb)
+	local pending = pending_adds[mb]
+	if not pending or #pending == 0 then
+		pending_adds[mb] = nil
+		return
+	end
+
+	local info = multibufs[mb]
+	if not info then
+		pending_adds[mb] = nil
+		return
+	end
+
+	-- For visibility-based loading, we just add them as "unloaded" entries
+	for _, opts in ipairs(pending) do
+		table.insert(info.bufs, {
+			buf = opts.buf,
+			source_extmark_ids = {},
+			region_extmark_ids = {},
+			virt_expand_extmark_ids = {},
+			pending_regions = opts.regions,
+		})
+	end
+
+	pending_adds[mb] = nil
+	M.multibuf_reload(mb)
 end
 
 --- @param buf integer
@@ -134,16 +216,6 @@ local function render_expand_lines(opts)
 		vim.notify(lines_or_error, vim.log.levels.ERROR)
 	end
 	return M.default_render_expand_lines(opts)
-end
-
---- @param args table
-local function multibuf_buf_changed(args)
-	local listener_info = buf_listeners[args.buf]
-	if listener_info then
-		for _, multibuf in ipairs(listener_info.multibufs) do
-			M.multibuf_reload(multibuf)
-		end
-	end
 end
 
 -- ──────── Structural Rendering ────────
@@ -284,10 +356,20 @@ function M.multibuf_reload(multibuf)
 	-- 1. Build Text Content
 	for _, buf_info in ipairs(info.bufs) do
 		table.insert(virt_name_indices, #all_lines)
-		for _, source_extmark_id in ipairs(buf_info.source_extmark_ids) do
-			local s_start, s_end = get_extmark_range(buf_info.buf, source_extmark_id)
-			table.insert(virt_expand_lnums, #all_lines)
-			vim.list_extend(all_lines, vim.api.nvim_buf_get_lines(buf_info.buf, s_start, s_end, true))
+		if buf_info.pending_regions then
+			for _, region in ipairs(buf_info.pending_regions) do
+				table.insert(virt_expand_lnums, #all_lines)
+				local count = (region.end_row - region.start_row) + 1
+				for _ = 1, count do
+					table.insert(all_lines, "") -- empty line while temporarily loading
+				end
+			end
+		else
+			for _, source_extmark_id in ipairs(buf_info.source_extmark_ids) do
+				local s_start, s_end = get_extmark_range(buf_info.buf, source_extmark_id)
+				table.insert(virt_expand_lnums, #all_lines)
+				vim.list_extend(all_lines, vim.api.nvim_buf_get_lines(buf_info.buf, s_start, s_end, true))
+			end
 		end
 	end
 	table.insert(virt_expand_lnums, #all_lines)
@@ -309,27 +391,51 @@ function M.multibuf_reload(multibuf)
 		})
 
 		local last_s_end = 0
-		for s_idx, src_extmark_id in ipairs(buf_info.source_extmark_ids) do
-			local s_start, s_end = get_extmark_range(buf_info.buf, src_extmark_id)
-			local slice_len = s_end - s_start
+		if buf_info.pending_regions then
+			for s_idx, region in ipairs(buf_info.pending_regions) do
+				local slice_len = (region.end_row - region.start_row) + 1
+				for i = 0, slice_len - 1 do
+					place_line_number_signs(multibuf, current_lnum + i, region.start_row + i)
+				end
 
-			for i = 0, slice_len - 1 do
-				place_line_number_signs(multibuf, current_lnum + i, s_start + i)
-			end
-
-			place_expander(multibuf, virt_expand_lnums[virt_expand_idx], {
-				expand_direction = (s_idx == 1) and "above" or "both",
-				count = s_start - last_s_end,
-				window = win or 0,
-			})
-
-			buf_info.region_extmark_ids[s_idx] =
-				vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, current_lnum, 0, {
-					end_row = current_lnum + slice_len,
-					end_right_gravity = true,
+				place_expander(multibuf, virt_expand_lnums[virt_expand_idx], {
+					expand_direction = (s_idx == 1) and "above" or "both",
+					count = region.start_row - last_s_end,
+					window = win or 0,
 				})
 
-			current_lnum, last_s_end, virt_expand_idx = current_lnum + slice_len, s_end, virt_expand_idx + 1
+				buf_info.region_extmark_ids[s_idx] =
+					vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, current_lnum, 0, {
+						end_row = current_lnum + slice_len,
+						end_right_gravity = true,
+					})
+
+				current_lnum, last_s_end, virt_expand_idx =
+					current_lnum + slice_len, region.end_row + 1, virt_expand_idx + 1
+			end
+		else
+			for s_idx, src_extmark_id in ipairs(buf_info.source_extmark_ids) do
+				local s_start, s_end = get_extmark_range(buf_info.buf, src_extmark_id)
+				local slice_len = s_end - s_start
+
+				for i = 0, slice_len - 1 do
+					place_line_number_signs(multibuf, current_lnum + i, s_start + i)
+				end
+
+				place_expander(multibuf, virt_expand_lnums[virt_expand_idx], {
+					expand_direction = (s_idx == 1) and "above" or "both",
+					count = s_start - last_s_end,
+					window = win or 0,
+				})
+
+				buf_info.region_extmark_ids[s_idx] =
+					vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, current_lnum, 0, {
+						end_row = current_lnum + slice_len,
+						end_right_gravity = true,
+					})
+
+				current_lnum, last_s_end, virt_expand_idx = current_lnum + slice_len, s_end, virt_expand_idx + 1
+			end
 		end
 	end
 
@@ -346,46 +452,71 @@ function M.setup(opts)
 	M.multibuf_hl_ns = vim.api.nvim_create_namespace("MultibufHighlights")
 
 	-- Decoration provider mirrors source highlights into the multibuffer viewport
-	vim.api.nvim_set_decoration_provider(M.multibuf_hl_ns, {
-		on_win = function(_, _, multibuf, top, bot)
-			if not M.multibuf_is_valid(multibuf) then
-				return false
-			end
-			local info = multibufs[multibuf]
-			if not info then
-				return false
-			end
+	local function incremental_load_source_and_update(multibuf, top, bot)
+		if not M.multibuf_is_valid(multibuf) then
+			return false
+		end
+		local info = multibufs[multibuf]
+		if not info then
+			return false
+		end
 
-			local slices = vim.api.nvim_buf_get_extmarks(
-				multibuf,
-				M.multibuf__ns,
-				{ top, 0 },
-				{ bot, -1 },
-				{ details = true, overlap = true }
-			)
-			for _, extmark in ipairs(slices) do
-				for _, b_info in ipairs(info.bufs) do
-					for i, reg_id in ipairs(b_info.region_extmark_ids) do
-						if extmark[1] == reg_id then
-							local r_start, r_end = get_extmark_range(multibuf, reg_id)
-							local s_start, _ = get_extmark_range(b_info.buf, b_info.source_extmark_ids[i])
+		local need_loadbufs = {}
 
-							local v_start, v_end = math.max(top, r_start), math.min(bot + 1, r_end)
-							if v_start < v_end then
-								local s_range_start = s_start + (v_start - r_start)
-								local s_range_end = s_range_start + (v_end - v_start)
+		local slices = vim.api.nvim_buf_get_extmarks(
+			multibuf,
+			M.multibuf__ns,
+			{ top, 0 },
+			{ bot, -1 },
+			{ details = true, overlap = true }
+		)
+		for _, extmark in ipairs(slices) do
+			for _, b_info in ipairs(info.bufs) do
+				for i, reg_id in ipairs(b_info.region_extmark_ids) do
+					if extmark[1] == reg_id then
+						if b_info.pending_regions then
+							if not vim.api.nvim_buf_is_loaded(b_info.buf) then
+								table.insert(need_loadbufs, b_info)
+							end
+							goto next_extmark
+						end
 
-								local s_ft = vim.api.nvim_get_option_value("filetype", { buf = b_info.buf })
-								local s_lang = vim.treesitter.language.get_lang(s_ft)
-								if s_lang then
-									project_highlights(multibuf, b_info.buf, s_range_start, s_range_end, v_start)
-								end
+						local r_start, r_end = get_extmark_range(multibuf, reg_id)
+						local s_start, _ = get_extmark_range(b_info.buf, b_info.source_extmark_ids[i])
+
+						local v_start, v_end = math.max(top, r_start), math.min(bot + 1, r_end)
+						if v_start < v_end then
+							local s_range_start = s_start + (v_start - r_start)
+							local s_range_end = s_range_start + (v_end - v_start)
+
+							local s_ft = vim.api.nvim_get_option_value("filetype", { buf = b_info.buf })
+							local s_lang = vim.treesitter.language.get_lang(s_ft)
+							if s_lang then
+								project_highlights(multibuf, b_info.buf, s_range_start, s_range_end, v_start)
 							end
 						end
 					end
 				end
 			end
-			return true
+			::next_extmark::
+		end
+
+		-- Reload to replace placeholders with real content
+		if #need_loadbufs > 0 then
+			vim.schedule(function()
+				for _, b_info in ipairs(need_loadbufs) do
+					load_source_buf(multibuf, b_info)
+				end
+				M.multibuf_reload(multibuf)
+			end)
+		end
+
+		return true
+	end
+
+	vim.api.nvim_set_decoration_provider(M.multibuf_hl_ns, {
+		on_win = function(_, _, multibuf, top, bot)
+			return incremental_load_source_and_update(multibuf, top, bot)
 		end,
 	})
 
@@ -446,39 +577,33 @@ function M.multibuf_add_buf(mb, opts)
 end
 
 --- @param mb integer
+function M.multibuf_clear_bufs(mb)
+	local info = multibufs[mb]
+	if not info then
+		return
+	end
+	info.bufs = {}
+	pending_adds[mb] = nil
+	M.multibuf_reload(mb)
+end
+
+--- @param mb integer
 --- @param opts_list MultibufAddBufOptions[]
 function M.multibuf_add_bufs(mb, opts_list)
 	local info = multibufs[mb]
-	for _, opts in ipairs(opts_list) do
-		local buf = opts.buf
-		local line_count = vim.api.nvim_buf_line_count(buf)
-		local source_ids = {}
-		for _, region in ipairs(opts.regions) do
-			table.insert(
-				source_ids,
-				vim.api.nvim_buf_set_extmark(buf, M.multibuf__ns, clamp(region.start_row, 0, line_count - 1), 0, {
-					end_row = clamp(region.end_row + 1, 0, line_count),
-					end_right_gravity = true,
-				})
-			)
-		end
-		if not buf_listeners[buf] then
-			local id = vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-				buffer = buf,
-				callback = multibuf_buf_changed,
-			})
-			buf_listeners[buf] = { change_autocmd_id = id, multibufs = { mb } }
-		else
-			list_insert_unique(buf_listeners[buf].multibufs, mb)
-		end
-		table.insert(info.bufs, {
-			buf = buf,
-			source_extmark_ids = source_ids,
-			region_extmark_ids = {},
-			virt_expand_extmark_ids = {},
-		})
+	if not info then
+		return
 	end
-	M.multibuf_reload(mb)
+
+	if not pending_adds[mb] then
+		pending_adds[mb] = {}
+	end
+
+	for _, opts in ipairs(opts_list) do
+		table.insert(pending_adds[mb], opts)
+	end
+
+	process_pending_adds(mb)
 end
 
 --- @param win integer window handle
@@ -487,9 +612,28 @@ function M.win_set_multibuf(win, mb)
 	vim.api.nvim_win_set_buf(win, mb)
 end
 
+--- @param mb integer
+--- @return boolean
+function M.multibuf_is_loading(mb)
+	local info = multibufs[mb]
+	if not info then
+		return false
+	end
+	if pending_adds[mb] and #pending_adds[mb] > 0 then
+		return true
+	end
+	for _, b in ipairs(info.bufs) do
+		if b.pending_regions then
+			return true
+		end
+	end
+	return false
+end
+
 --- @param buf integer
 function M.multibuf__wipeout(buf)
 	multibufs[buf] = nil
+	pending_adds[buf] = nil
 	if buf_listeners[buf] then
 		vim.api.nvim_del_autocmd(buf_listeners[buf].change_autocmd_id)
 		buf_listeners[buf] = nil
