@@ -75,6 +75,19 @@ multibuf_buf_get_line({mb}, {bufnr}, {lnum})	*multibuffer.multibuf_buf_get_line(
 	Returns the line number in the multibuffer {mb} that corresponds to
 	the given {bufnr} and {lnum}.
 
+multibuf_slice_expand({mb}, {dt}, {db}, {ln})	*multibuffer.multibuf_slice_expand()*
+	Expand or shrink a slice in a multibuffer.
+	{dt}: lines to expand upwards (negative to shrink).
+	{db}: lines to expand downwards (negative to shrink).
+	{ln}: optional 0-indexed line in multibuffer to identify the slice.
+	Defaults to the cursor line.
+
+multibuf_slice_expand_top({mb}, {d}, {ln})	*multibuffer.multibuf_slice_expand_top()*
+	Convenience for expanding the top of a slice.
+
+multibuf_slice_expand_bottom({mb}, {d}, {ln})	*multibuffer.multibuf_slice_expand_bottom()*
+	Convenience for expanding the bottom of a slice.
+
 win_set_multibuf({win}, {mb})			*multibuffer.win_set_multibuf()*
 	Sets the window {win} to display multibuffer {mb}.
 
