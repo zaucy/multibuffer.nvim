@@ -1027,10 +1027,16 @@ function M.multibuf_slice_expand(mb, delta_top, delta_bot, line)
 			end
 		else
 			region.start_row = math.max(0, region.start_row)
+			if source_buf == b_info.buf and source_line then
+				source_line = math.max(region.start_row, math.min(region.end_row, source_line))
+			end
 		end
 	else
 		local sid = b_info.source_extmark_ids[s_idx]
 		local s, e = get_extmark_range(b_info.buf, sid)
+		if not s then
+			return
+		end
 		local line_count = vim.api.nvim_buf_line_count(b_info.buf)
 
 		local ns = math.max(0, s - delta_top)
@@ -1048,6 +1054,9 @@ function M.multibuf_slice_expand(mb, delta_top, delta_bot, line)
 				end_row = ne,
 				end_right_gravity = true,
 			})
+			if source_buf == b_info.buf and source_line then
+				source_line = math.max(ns, math.min(ne - 1, source_line))
+			end
 		end
 	end
 
