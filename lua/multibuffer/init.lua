@@ -12,6 +12,7 @@
 --- @field region_extmark_ids integer[] IDs of extmarks tracking regions in multibuffer
 --- @field virt_expand_extmark_ids integer[] IDs of extmarks for expander UI
 --- @field pending_regions MultibufRegion[]? List of regions to be set up once loaded
+--- @field loading boolean? Whether this buffer is currently being loaded/processed
 
 --- @class MultibufInfo
 --- @field bufs MultibufBufInfo[] Info about included buffers
@@ -87,6 +88,7 @@ end
 local function load_source_buf(mb, buf_info)
 	local buf = buf_info.buf
 	if vim.api.nvim_buf_is_loaded(buf) and #buf_info.source_extmark_ids > 0 then
+		buf_info.loading = false
 		return false
 	end
 
@@ -109,6 +111,7 @@ local function load_source_buf(mb, buf_info)
 		)
 	end
 	buf_info.pending_regions = nil
+	buf_info.loading = false
 
 	if not buf_listeners[buf] then
 		local id = vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
@@ -475,7 +478,8 @@ function M.setup(opts)
 				for i, reg_id in ipairs(b_info.region_extmark_ids) do
 					if extmark[1] == reg_id then
 						if b_info.pending_regions then
-							if not vim.api.nvim_buf_is_loaded(b_info.buf) then
+							if not b_info.loading then
+								b_info.loading = true
 								table.insert(need_loadbufs, b_info)
 							end
 							goto next_extmark
@@ -657,7 +661,11 @@ function M.multibuf_get_buf_at_line(mb, line)
 			for i, rid in ipairs(b.region_extmark_ids) do
 				if m[1] == rid then
 					local rs, _ = get_extmark_range(mb, rid)
-					local ss, _ = get_extmark_range(b.buf, b.source_extmark_ids[i])
+					local sid = b.source_extmark_ids[i]
+					if not sid then
+						return b.buf, nil
+					end
+					local ss, _ = get_extmark_range(b.buf, sid)
 					return b.buf, ss + (line - rs)
 				end
 			end
