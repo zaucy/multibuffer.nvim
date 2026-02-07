@@ -1,0 +1,13 @@
+b:multibuffer_expander_max_lines	multibuffer.txt	/*b:multibuffer_expander_max_lines*
+g:multibuffer_expander_max_lines	multibuffer.txt	/*g:multibuffer_expander_max_lines*
+multibuffer-api	multibuffer.txt	/*multibuffer-api*
+multibuffer-config	multibuffer.txt	/*multibuffer-config*
+multibuffer-contents	multibuffer.txt	/*multibuffer-contents*
+multibuffer-intro	multibuffer.txt	/*multibuffer-intro*
+multibuffer-vars	multibuffer.txt	/*multibuffer-vars*
+multibuffer.create_multibuf()	multibuffer.txt	/*multibuffer.create_multibuf()*
+multibuffer.multibuf_add_buf()	multibuffer.txt	/*multibuffer.multibuf_add_buf()*
+multibuffer.multibuf_buf_get_line()	multibuffer.txt	/*multibuffer.multibuf_buf_get_line()*
+multibuffer.multibuf_get_buf_at_line()	multibuffer.txt	/*multibuffer.multibuf_get_buf_at_line()*
+multibuffer.txt	multibuffer.txt	/*multibuffer.txt*
+multibuffer.win_set_multibuf()	multibuffer.txt	/*multibuffer.win_set_multibuf()*

@@ -1,0 +1,82 @@
+*multibuffer.txt*	Multibuffer plugin for Neovim
+
+Author:  Zaucy
+License: MIT
+
+==============================================================================
+CONTENTS					*multibuffer-contents*
+
+1. Introduction					|multibuffer-intro|
+2. Configuration				|multibuffer-config|
+3. Buffer Variables				|multibuffer-vars|
+4. Lua API					|multibuffer-api|
+
+==============================================================================
+1. Introduction					*multibuffer-intro*
+
+multibuffer.nvim is a plugin that allows you to aggregate multiple regions or
+slices from different buffers into a single virtual "multibuffer". It
+projects highlights, diagnostics, and other decorations from the source
+buffers into the multibuffer view.
+
+==============================================================================
+2. Configuration				*multibuffer-config*
+
+To initialize the plugin, call the setup function:
+>lua
+    require('multibuffer').setup({
+        -- Max lines to show as dimmed text in expander
+        -- Default: 0
+        expander_max_lines = 1,
+
+        -- Custom title renderer (optional)
+        render_multibuf_title = function(bufnr) ... end,
+
+        -- Custom expander renderer (optional)
+        render_expand_lines = function(opts) ... end,
+    })
+<
+					*g:multibuffer_expander_max_lines*
+g:multibuffer_expander_max_lines
+	The global default for the maximum number of hidden lines to show
+	as dimmed virtual text. If the gap between two regions is less than
+	or equal to this value, the actual line content is displayed using
+	the |Comment| highlight group instead of the standard expander bar.
+	Default: 0
+
+==============================================================================
+3. Buffer Variables				*multibuffer-vars*
+
+					*b:multibuffer_expander_max_lines*
+b:multibuffer_expander_max_lines
+	Buffer-local override for |g:multibuffer_expander_max_lines|.
+	Allows specific multibuffers to show more or fewer dimmed lines
+	regardless of the global setting.
+
+==============================================================================
+4. Lua API					*multibuffer-api*
+
+create_multibuf({opts})				*multibuffer.create_multibuf()*
+	Creates a new multibuffer.
+	{opts} is an optional table with:
+	    header: string[] Custom header lines.
+
+multibuf_add_buf({mb}, {opts})			*multibuffer.multibuf_add_buf()*
+	Adds a buffer and its regions to a multibuffer.
+	{opts} is a table with:
+	    buf: integer Buffer handle.
+	    regions: MultibufRegion[] List of {start_row, end_row}.
+
+multibuf_get_buf_at_line({mb}, {line})		*multibuffer.multibuf_get_buf_at_line()*
+	Returns the source {bufnr} and {source_line} (0-indexed) for a given
+	{line} in the multibuffer.
+
+multibuf_buf_get_line({mb}, {bufnr}, {lnum})	*multibuffer.multibuf_buf_get_line()*
+	Returns the line number in the multibuffer {mb} that corresponds to
+	the given {bufnr} and {lnum}.
+
+win_set_multibuf({win}, {mb})			*multibuffer.win_set_multibuf()*
+	Sets the window {win} to display multibuffer {mb}.
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:
