@@ -457,7 +457,9 @@ end
 -- ──────── Core Multibuffer Management ────────
 
 --- @param multibuf integer
-function M.multibuf_reload(multibuf)
+--- @param force_source_buf integer?
+--- @param force_source_line integer?
+function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 	local info = multibufs[multibuf]
 	if not info then
 		return
@@ -466,7 +468,11 @@ function M.multibuf_reload(multibuf)
 	local cursor_pos = win and vim.api.nvim_win_get_cursor(win)
 	local source_buf, source_line
 	if win then
-		source_buf, source_line = M.multibuf_get_buf_at_line(multibuf, cursor_pos[1] - 1)
+		if force_source_buf then
+			source_buf, source_line = force_source_buf, force_source_line
+		else
+			source_buf, source_line = M.multibuf_get_buf_at_line(multibuf, cursor_pos[1] - 1)
+		end
 	end
 
 	vim.api.nvim_buf_clear_namespace(multibuf, M.multibuf__ns, 0, -1)
@@ -881,8 +887,14 @@ function M.multibuf_slice_expand(mb, delta_top, delta_bot, line)
 	vim.validate("delta_bot", delta_bot, "number")
 	vim.validate("line", line, { "number", "nil" })
 
+	local win = get_buf_win(mb)
+	local source_buf, source_line
+	if win then
+		local cursor = vim.api.nvim_win_get_cursor(win)
+		source_buf, source_line = M.multibuf_get_buf_at_line(mb, cursor[1] - 1)
+	end
+
 	if line == nil then
-		local win = get_buf_win(mb)
 		if not win then
 			return
 		end
@@ -934,7 +946,7 @@ function M.multibuf_slice_expand(mb, delta_top, delta_bot, line)
 	end
 
 	merge_buffer_regions(b_info)
-	M.multibuf_reload(mb)
+	M.multibuf_reload(mb, source_buf, source_line)
 end
 
 --- @param mb integer
