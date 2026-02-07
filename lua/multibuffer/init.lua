@@ -778,14 +778,16 @@ function M.setup(opts)
 	})
 end
 
--- ──────── Public API ────────
+--- @class CreateMultibufOptions
+--- @field header string[]|nil
 
---- @return integer bufnr
+--- @param opts CreateMultibufOptions|nil
+--- @return integer mbufnr
 function M.create_multibuf(opts)
 	opts = opts or {}
 	vim.validate("opts.header", opts.header, { "table", "nil" })
 
-	local id = vim.api.nvim_create_buf(true, false)
+	local id = vim.api.nvim_create_buf(true, true)
 	local header = opts.header or create_multibuf_header()
 	local info = { bufs = {}, header = header }
 	vim.api.nvim_buf_set_name(id, "multibuffer://" .. id)
