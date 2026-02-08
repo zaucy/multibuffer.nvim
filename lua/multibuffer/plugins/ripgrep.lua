@@ -495,7 +495,6 @@ function M.multibuf_ripgrep(opts)
 			if cursor[1] <= 3 then
 				ensure_prompt_win()
 				vim.api.nvim_set_current_win(prompt_win)
-				vim.cmd("startinsert")
 			end
 		end,
 	})
