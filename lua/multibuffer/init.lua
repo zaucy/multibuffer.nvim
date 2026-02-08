@@ -762,20 +762,6 @@ function M.setup(opts)
 			return incremental_load_source_and_update(multibuf, top, bot)
 		end,
 	})
-
-	vim.api.nvim_create_autocmd({ "BufReadCmd", "BufWriteCmd" }, {
-		pattern = "multibuffer://*",
-		callback = function(args)
-			pcall(vim.treesitter.stop, args.buf)
-			M.multibuf_reload(args.buf)
-		end,
-	})
-	vim.api.nvim_create_autocmd("BufWipeout", {
-		pattern = "*",
-		callback = function(args)
-			M.multibuf__wipeout(args.buf)
-		end,
-	})
 end
 
 --- @class CreateMultibufOptions
@@ -790,11 +776,25 @@ function M.create_multibuf(opts)
 	local id = vim.api.nvim_create_buf(true, true)
 	local header = opts.header or create_multibuf_header()
 	local info = { bufs = {}, header = header }
-	vim.api.nvim_buf_set_name(id, "multibuffer://" .. id)
 	vim.api.nvim_set_option_value("buftype", "acwrite", { buf = id })
 	vim.api.nvim_set_option_value("filetype", "multibuffer", { buf = id })
 	vim.api.nvim_set_option_value("modifiable", false, { buf = id })
 	multibufs[id] = info
+
+	vim.api.nvim_create_autocmd({ "BufReadCmd", "BufWriteCmd" }, {
+		buffer = id,
+		callback = function(args)
+			pcall(vim.treesitter.stop, args.buf)
+			M.multibuf_reload(args.buf)
+		end,
+	})
+	vim.api.nvim_create_autocmd("BufWipeout", {
+		buffer = id,
+		callback = function(args)
+			M.multibuf__wipeout(args.buf)
+		end,
+	})
+
 	return id
 end
 

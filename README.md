@@ -4,7 +4,6 @@ Experimental multibuffers API for neovim. Expect breaking changes and some insta
 
 Strategy:
 
-* `multibuffer://` schema for buffer name
 * `multibuffer` filetype assigned to all multibuffers
 * reads and writes handled through `BufReadCmd` and `BufWriteCmd`
 * customizable virtual text above each section in multibuffer
@@ -58,8 +57,10 @@ Disable standard line numbers to avoid confusion with the multibuffer's own line
 -- using BufWinEnter so that if the multibuf window changes to a different buffer it will reset
 -- NOTE: this assumes you're setting your window options in another autocmd
 vim.api.nvim_create_autocmd("BufWinEnter", {
-	pattern = "multibuffer://*",
 	callback = function(args)
+		if vim.bo[args.buf].filetype ~= "multibuffer" then
+			return
+		end
 		local winid = vim.api.nvim_get_current_win()
 		vim.api.nvim_set_option_value("number", false, { scope = "local", win = winid })
 		vim.api.nvim_set_option_value("relativenumber", false, { scope = "local", win = winid })
@@ -70,7 +71,7 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
 
 vim.api.nvim_create_autocmd({ "BufEnter", "BufNew", "BufWinEnter", "TermOpen" }, {
 	callback = function()
-		if vim.bo.buftype == "multibuffer" then return end
+		if vim.bo.filetype == "multibuffer" then return end
 
 		-- restore your window options
 	end,
