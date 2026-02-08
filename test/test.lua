@@ -4,6 +4,30 @@ vim.opt.signcolumn = "auto:4"
 local api = require("multibuffer")
 api.setup({})
 
+vim.api.nvim_create_autocmd("FileType", {
+	pattern = "multibuffer",
+	callback = function(args)
+		-- expand/shrink keys
+		local keys = {
+			{ "<C-up>", 1, 0 },
+			{ "<C-k>", 1, 0 },
+			{ "<C-down>", 0, 1 },
+			{ "<C-j>", 0, 1 },
+
+			{ "<C-S-up>", 0, -1 },
+			{ "<C-S-k>", 0, -1 },
+			{ "<C-S-down>", -1, 0 },
+			{ "<C-S-j>", -1, 0 },
+		}
+
+		for _, entry in ipairs(keys) do
+			vim.keymap.set("n", entry[1], function()
+				api.multibuf_slice_expand(args.buf, entry[2], entry[3])
+			end)
+		end
+	end,
+})
+
 local mbuf = api.create_multibuf()
 api.multibuf_add_buf(mbuf, { buf = vim.fn.bufadd("a.txt"), regions = { { start_row = 119, end_row = 119 } } })
 api.multibuf_add_buf(mbuf, { buf = vim.fn.bufadd("b.txt"), regions = { { start_row = 0, end_row = 0 } } })
