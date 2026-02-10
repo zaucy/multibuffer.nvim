@@ -32,6 +32,12 @@ local mbuf = api.create_multibuf()
 api.multibuf_add_buf(mbuf, { buf = vim.fn.bufadd("a.txt"), regions = { { start_row = 119, end_row = 119 } } })
 api.multibuf_add_buf(mbuf, { buf = vim.fn.bufadd("b.txt"), regions = { { start_row = 0, end_row = 0 } } })
 
+api.multibuf_add_buf(mbuf, {
+	buf = vim.fn.bufadd("b.txt"),
+	regions = { { start_row = 0, end_row = 0 } },
+	title = { { { " [[ Custom Title ]] ", "TabLine" } } },
+})
+
 local header_msg = "clean environment for testing multibuffer.nvim"
 
 api.multibuf_set_header(mbuf, {

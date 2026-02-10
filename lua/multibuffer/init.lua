@@ -2,9 +2,13 @@
 --- @field start_row integer 0-indexed start row
 --- @field end_row integer 0-indexed end row (inclusive)
 
+--- @alias MultibufTitleRenderFunction fun(bufnr: integer): any[]
+
 --- @class MultibufAddBufOptions
 --- @field buf integer Buffer handle
 --- @field regions MultibufRegion[] List of regions to include
+--- @field title any[]|nil|MultibufTitleRenderFunction
+--- @field id string|nil
 
 --- @class MultibufBufInfo
 --- @field buf integer Buffer handle
@@ -13,6 +17,8 @@
 --- @field virt_expand_extmark_ids integer[] IDs of extmarks for expander UI
 --- @field pending_regions MultibufRegion[]? List of regions to be set up once loaded
 --- @field loading boolean? Whether this buffer is currently being loaded/processed
+--- @field title any[]|nil|MultibufTitleRenderFunction
+--- @field id string|nil
 
 --- @class MultibufInfo
 --- @field bufs MultibufBufInfo[] Info about included buffers
@@ -23,7 +29,7 @@
 --- @field change_autocmd_id integer ID of the TextChanged autocmd
 
 --- @class MultibufSetupOptions
---- @field render_multibuf_title (fun(bufnr: integer): any[])? Custom title renderer
+--- @field render_multibuf_title MultibufTitleRenderFunction|nil Custom title renderer
 --- @field render_expand_lines (fun(opts: multibuffer.RenderExpandLinesOptions): any[])? Custom expander renderer
 --- @field expander_max_lines integer? Max lines to show as dimmed text in expander
 
@@ -148,6 +154,8 @@ local function process_pending_adds(mb)
 			region_extmark_ids = {},
 			virt_expand_extmark_ids = {},
 			pending_regions = opts.regions,
+			title = opts.title,
+			id = opts.id,
 		})
 	end
 
@@ -357,17 +365,33 @@ local function expand_tabs(s, tabstop)
 	return result
 end
 
---- @param bufnr integer
+--- @param buf_info MultibufBufInfo
 --- @return any[]
-local function render_multibuf_title(bufnr)
+local function render_multibuf_title(buf_info)
+	if buf_info.title then
+		local buf_title = buf_info.title
+		if type(buf_title) == "table" then
+			return buf_title
+		elseif type(buf_title) == "function" then
+			local success, lines_or_error = pcall(buf_title, buf_info.buf)
+			if success then
+				return lines_or_error
+			end
+			vim.notify(lines_or_error, vim.log.levels.ERROR)
+		else
+			vim.notify("bad opt title type " .. type(buf_title), vim.log.levels.ERROR)
+		end
+	end
+
 	if M.user_opts.render_multibuf_title then
-		local success, lines_or_error = pcall(M.user_opts.render_multibuf_title, bufnr)
+		local success, lines_or_error = pcall(M.user_opts.render_multibuf_title, buf_info.buf)
 		if success then
 			return lines_or_error
 		end
 		vim.notify(lines_or_error, vim.log.levels.ERROR)
 	end
-	return M.default_render_multibuf_title(bufnr)
+
+	return M.default_render_multibuf_title(buf_info.buf)
 end
 
 --- @param opts multibuffer.RenderExpandLinesOptions
@@ -588,7 +612,7 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 		if has_content then
 			buf_info.region_extmark_ids = {}
 			vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, virt_name_indices[name_idx_cursor], 0, {
-				virt_lines = render_multibuf_title(buf_info.buf),
+				virt_lines = render_multibuf_title(buf_info),
 				virt_lines_above = true,
 				virt_lines_leftcol = true,
 				priority = 20001,

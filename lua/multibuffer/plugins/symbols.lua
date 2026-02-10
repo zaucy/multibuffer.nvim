@@ -6,6 +6,35 @@ local symbol_kinds = {
 	"Namespace",
 }
 
+local symbol_table = {
+	["Array"] = { "", "Array" },
+	["Boolean"] = { "", "@lsp.type.boolean" },
+	["Class"] = { "", "@lsp.type.class" },
+	["Constant"] = { "", "@constant" },
+	["constructor"] = { "", "@constructor" },
+	["Constructor"] = { "", "@lsp.type.enum" },
+	["EnumMember"] = { "", "@lsp.type.enumMember" },
+	["Event"] = { "", "@lsp.type.event" },
+	["Field"] = { "", "@field" },
+	["File"] = "",
+	["Function"] = { "", "@function" },
+	["Interface"] = { "", "@lsp.type.interface" },
+	["Key"] = { "", "@lsp.type.keyword" },
+	["Method"] = { "", "@method" },
+	["Module"] = { "", "@module" },
+	["Namespace"] = { "", "@namespace" },
+	["Null"] = "󰟢",
+	["Number"] = { "", "@number" },
+	["Object"] = { "" },
+	["Operator"] = { "", "@lsp.type.operator" },
+	["Package"] = { "", "@namespace" },
+	["Property"] = { "", "@property" },
+	["String"] = { "", "@string" },
+	["Struct"] = { "", "@lsp.type.struct" },
+	["TypeParameter"] = { "", "@lsp.type.typeParameter" },
+	["Variable"] = { "", "@variable" },
+}
+
 local function should_show_symbol(entry)
 	return vim.tbl_contains(symbol_kinds, entry.kind)
 end
@@ -30,24 +59,47 @@ function M.multibuf_document_symbols(buf)
 		on_list = function(t)
 			local filtered_entry = vim.tbl_filter(should_show_symbol, t.items)
 
-			--- @param entry vim.quickfix.entry
-			local symbol_lines = vim.tbl_map(function(entry)
-				return entry.lnum - 1
-			end, filtered_entry)
-
-			vim.fn.sort(symbol_lines)
-			vim.list.unique(symbol_lines)
-
 			api.multibuf_set_header(symbols_mbuf, {
-				string.format(" found %i document symbols ", #symbol_lines),
+				string.format(" found %i document symbols ", #filtered_entry),
 			})
 
-			api.multibuf_add_buf(symbols_mbuf, {
-				buf = buf,
-				regions = vim.tbl_map(function(lnum)
-					return { start_row = lnum, end_row = lnum }
-				end, symbol_lines),
-			})
+			local entries_by_symbol_kind = {}
+			for _, entry in ipairs(filtered_entry) do
+				entries_by_symbol_kind[entry.kind] = entries_by_symbol_kind[entry.kind] or {}
+				table.insert(entries_by_symbol_kind[entry.kind], entry)
+			end
+
+			local add_opts = {}
+
+			for kind, entries in pairs(entries_by_symbol_kind) do
+				--- @param entry vim.quickfix.entry
+				local symbol_lines = vim.tbl_map(function(entry)
+					return entry.lnum - 1
+				end, entries)
+
+				vim.fn.sort(symbol_lines)
+				vim.list.unique(symbol_lines)
+
+				table.insert(add_opts, {
+					buf = buf,
+					title = {
+						{},
+						{
+							{ " " },
+							symbol_table[kind],
+							{ " " },
+							{ kind },
+							{ string.format(" (%i) ", #entries) },
+						},
+						{},
+					},
+					regions = vim.tbl_map(function(lnum)
+						return { start_row = lnum, end_row = lnum }
+					end, symbol_lines),
+				})
+			end
+
+			api.multibuf_add_bufs(symbols_mbuf, add_opts)
 		end,
 	})
 
