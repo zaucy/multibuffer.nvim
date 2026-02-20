@@ -29,6 +29,30 @@ To initialize the plugin, call the setup function:
         -- Default: 0
         expander_max_lines = 1,
 
+        -- Signs for expandable areas in the signcolumn
+        -- Default: { above = "↑", below = "↓", both = "↕" }
+        expander_signs = {
+            above = "↑",
+            below = "↓",
+            both = "↕",
+        },
+
+        -- Highlight group for expander signs
+        -- Default: "Folded"
+        expander_sign_hl = "Folded",
+
+        -- Highlight groups for alternating regions
+        -- Default: "MultibufRegionEven" (links to Normal)
+        --          "MultibufRegionOdd" (subtle offset from Normal background)
+        region_hl_even = "MultibufRegionEven",
+        region_hl_odd = "MultibufRegionOdd",
+
+        -- Contrast intensity for the default "Odd" region background.
+        -- Higher values create more contrast (difference from Normal bg).
+        -- Lower values make the alternating effect more subtle.
+        -- Default: 12
+        region_hl_odd_adjust = 12,
+
         -- Custom title renderer (optional)
         render_multibuf_title = function(bufnr) ... end,
 
