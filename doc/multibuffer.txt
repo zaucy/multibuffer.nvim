@@ -29,6 +29,18 @@ To initialize the plugin, call the setup function:
         -- Default: 0
         expander_max_lines = 1,
 
+        -- Signs for expandable areas in the signcolumn
+        -- Default: { above = "↑", below = "↓", both = "↕" }
+        expander_signs = {
+            above = "↑",
+            below = "↓",
+            both = "↕",
+        },
+
+        -- Highlight group for expander signs
+        -- Default: "Folded"
+        expander_sign_hl = "Folded",
+
         -- Custom title renderer (optional)
         render_multibuf_title = function(bufnr) ... end,
 

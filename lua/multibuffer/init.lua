@@ -32,6 +32,8 @@
 --- @field render_multibuf_title MultibufTitleRenderFunction|nil Custom title renderer
 --- @field render_expand_lines (fun(opts: multibuffer.RenderExpandLinesOptions): any[])? Custom expander renderer
 --- @field expander_max_lines integer? Max lines to show as dimmed text in expander
+--- @field expander_signs { above: string, below: string, both: string }|nil
+--- @field expander_sign_hl string|nil
 
 --- @class multibuffer.RenderExpandLinesOptions
 --- @field expand_direction "above"|"below"|"both"
@@ -75,7 +77,14 @@ end
 
 local M = {
 	--- @type MultibufSetupOptions
-	user_opts = {},
+	user_opts = {
+		expander_signs = {
+			above = "↑",
+			below = "↓",
+			both = "↕",
+		},
+		expander_sign_hl = "Folded",
+	},
 	--- @type integer Namespace for structural elements (signs, titles)
 	multibuf__ns = nil,
 	--- @type integer Namespace for live highlight projection
@@ -413,18 +422,20 @@ end
 --- @param target_row integer
 --- @param source_row integer
 --- @param width integer?
-local function place_line_number_signs(multibuf, target_row, source_row, width)
+--- @param skip_first boolean?
+local function place_line_number_signs(multibuf, target_row, source_row, width, skip_first)
 	local signs = get_line_number_signs(source_row + 1, width or 1)
 	if width then
 		while #signs < width do
 			table.insert(signs, 1, "  ")
 		end
 	end
-	for digit_idx, text in ipairs(signs) do
+	local start_idx = skip_first and 2 or 1
+	for i = start_idx, #signs do
 		vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
-			sign_text = text,
+			sign_text = signs[i],
 			sign_hl_group = "LineNr",
-			priority = 100 - digit_idx,
+			priority = 100 - i,
 		})
 	end
 end
@@ -432,12 +443,23 @@ end
 --- @param multibuf integer
 --- @param target_row integer
 --- @param opts multibuffer.RenderExpandLinesOptions
-local function place_expander(multibuf, target_row, opts)
+--- @param no_sign boolean?
+local function place_expander(multibuf, target_row, opts, no_sign)
+	if opts.count <= 0 then
+		return
+	end
+
+	local signs = M.user_opts.expander_signs or {}
+	local sign_text = (not no_sign) and signs[opts.expand_direction]
+	local sign_hl = M.user_opts.expander_sign_hl or "Folded"
+
 	vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
 		virt_lines = render_expand_lines(opts),
-		virt_lines_above = true,
+		virt_lines_above = opts.expand_direction ~= "below",
 		virt_lines_leftcol = true,
 		priority = 20001,
+		sign_text = sign_text ~= "" and sign_text or nil,
+		sign_hl_group = sign_hl,
 	})
 end
 
@@ -601,6 +623,15 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 	local virt_expand_idx = 1
 	local name_idx_cursor = 1
 
+	local function get_expander_sign(direction)
+		local signs = M.user_opts.expander_signs or {}
+		local text = signs[direction]
+		if text and text ~= "" then
+			return text
+		end
+		return nil
+	end
+
 	for b_idx, buf_info in ipairs(info.bufs) do
 		local has_content = false
 		if buf_info.pending_regions and #buf_info.pending_regions > 0 then
@@ -620,15 +651,33 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 			name_idx_cursor = name_idx_cursor + 1
 
 			local last_s_end = 0
+			local source_line_count = vim.api.nvim_buf_line_count(buf_info.buf)
 			if buf_info.pending_regions then
 				for s_idx, region in ipairs(buf_info.pending_regions) do
 					local slice_len = (region.end_row - region.start_row) + 1
+					local is_last_slice = (s_idx == #buf_info.pending_regions)
+					local has_above = (region.start_row > last_s_end)
+					local has_below = is_last_slice and (region.end_row + 1 < source_line_count)
+
 					for i = 0, slice_len - 1 do
-						place_line_number_signs(multibuf, current_lnum + i, region.start_row + i, sc_width)
+						local skip_first = false
+						if sc_width > 0 then
+							local line_has_above = (i == 0 and has_above and get_expander_sign(s_idx == 1 and "above" or "both"))
+							local line_has_below = (i == slice_len - 1 and has_below and get_expander_sign("below"))
+							if line_has_above or line_has_below then
+								skip_first = true
+							end
+						end
+						place_line_number_signs(multibuf, current_lnum + i, region.start_row + i, sc_width, skip_first)
+					end
+
+					local above_direction = (s_idx == 1) and "above" or "both"
+					if slice_len == 1 and has_above and has_below then
+						above_direction = "both"
 					end
 
 					place_expander(multibuf, virt_expand_lnums[virt_expand_idx], {
-						expand_direction = (s_idx == 1) and "above" or "both",
+						expand_direction = above_direction,
 						count = region.start_row - last_s_end,
 						window = win or 0,
 						bufnr = buf_info.buf,
@@ -644,18 +693,62 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 					current_lnum, last_s_end, virt_expand_idx =
 						current_lnum + slice_len, region.end_row + 1, virt_expand_idx + 1
 				end
+
+				if last_s_end < source_line_count and current_lnum > 0 then
+					local last_slice_len = 0
+					local last_slice = buf_info.pending_regions[#buf_info.pending_regions]
+					if last_slice then
+						last_slice_len = (last_slice.end_row - last_slice.start_row) + 1
+					end
+					local no_sign = (last_slice_len == 1 and (last_slice.start_row > (buf_info.pending_regions[#buf_info.pending_regions - 1] and (buf_info.pending_regions[#buf_info.pending_regions - 1].end_row + 1) or 0)))
+					-- Actually, simplified: if slice_len was 1 and we had an above expander, it's on the same line.
+					-- Let's just recalculate it properly.
+					local last_region = buf_info.pending_regions[#buf_info.pending_regions]
+					local last_has_above = false
+					if #buf_info.pending_regions == 1 then
+						last_has_above = last_region.start_row > 0
+					else
+						local prev_region = buf_info.pending_regions[#buf_info.pending_regions - 1]
+						last_has_above = last_region.start_row > prev_region.end_row + 1
+					end
+					local last_slice_is_one = (last_region.end_row - last_region.start_row + 1) == 1
+					
+					place_expander(multibuf, current_lnum - 1, {
+						expand_direction = "below",
+						count = source_line_count - last_s_end,
+						window = win or 0,
+						bufnr = buf_info.buf,
+						start_row = last_s_end,
+					}, last_slice_is_one and last_has_above)
+				end
 			else
 				for s_idx, src_extmark_id in ipairs(buf_info.source_extmark_ids) do
 					local s_start, s_end = get_extmark_range(buf_info.buf, src_extmark_id)
 					if s_start and s_end then
 						local slice_len = s_end - s_start
+						local is_last_slice = (s_idx == #buf_info.source_extmark_ids)
+						local has_above = (s_start > last_s_end)
+						local has_below = is_last_slice and (s_end < source_line_count)
 
 						for i = 0, slice_len - 1 do
-							place_line_number_signs(multibuf, current_lnum + i, s_start + i, sc_width)
+							local skip_first = false
+							if sc_width > 0 then
+								local line_has_above = (i == 0 and has_above and get_expander_sign(s_idx == 1 and "above" or "both"))
+								local line_has_below = (i == slice_len - 1 and has_below and get_expander_sign("below"))
+								if line_has_above or line_has_below then
+									skip_first = true
+								end
+							end
+							place_line_number_signs(multibuf, current_lnum + i, s_start + i, sc_width, skip_first)
+						end
+
+						local above_direction = (s_idx == 1) and "above" or "both"
+						if slice_len == 1 and has_above and has_below then
+							above_direction = "both"
 						end
 
 						place_expander(multibuf, virt_expand_lnums[virt_expand_idx], {
-							expand_direction = (s_idx == 1) and "above" or "both",
+							expand_direction = above_direction,
 							count = s_start - last_s_end,
 							window = win or 0,
 							bufnr = buf_info.buf,
@@ -670,6 +763,28 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 
 						current_lnum, last_s_end, virt_expand_idx = current_lnum + slice_len, s_end, virt_expand_idx + 1
 					end
+				end
+
+				if last_s_end < source_line_count and current_lnum > 0 then
+					local last_sid = buf_info.source_extmark_ids[#buf_info.source_extmark_ids]
+					local ls, le = get_extmark_range(buf_info.buf, last_sid)
+					local last_has_above = false
+					if #buf_info.source_extmark_ids == 1 then
+						last_has_above = ls > 0
+					else
+						local prev_sid = buf_info.source_extmark_ids[#buf_info.source_extmark_ids - 1]
+						local _, ple = get_extmark_range(buf_info.buf, prev_sid)
+						last_has_above = ls > ple
+					end
+					local last_slice_is_one = (le - ls) == 1
+
+					place_expander(multibuf, current_lnum - 1, {
+						expand_direction = "below",
+						count = source_line_count - last_s_end,
+						window = win or 0,
+						bufnr = buf_info.buf,
+						start_row = last_s_end,
+					}, last_slice_is_one and last_has_above)
 				end
 			end
 		end
@@ -1177,8 +1292,8 @@ function M.default_render_expand_lines(opts)
 		return all_virt_lines
 	end
 
-	local icons = { above = "↑", below = "↓", both = "↕" }
-	local text = string.format(" --- [ %s %i ] ", icons[opts.expand_direction], opts.count)
+	local signs = M.user_opts.expander_signs or { above = "↑", below = "↓", both = "↕" }
+	local text = string.format(" --- [ %s %i ] ", signs[opts.expand_direction], opts.count)
 	local width = vim.api.nvim_win_get_width(opts.window)
 	return { { { text, "Folded" }, { string.rep("-", width - #text) .. " ", "Folded" } } }
 end
