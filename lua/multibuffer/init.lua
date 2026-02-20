@@ -101,137 +101,6 @@ local function multibuf_buf_changed(args)
 	end
 end
 
---- @param mb integer
---- @param buf_info MultibufBufInfo
-local function load_source_buf(mb, buf_info)
-	local buf = buf_info.buf
-	if vim.api.nvim_buf_is_loaded(buf) and #buf_info.source_extmark_ids > 0 then
-		buf_info.loading = false
-		return false
-	end
-
-	vim.fn.bufload(buf)
-
-	local line_count = vim.api.nvim_buf_line_count(buf)
-	local regions = buf_info.pending_regions or {}
-	buf_info.source_extmark_ids = {}
-
-	for _, region in ipairs(regions) do
-		table.insert(
-			buf_info.source_extmark_ids,
-			vim.api.nvim_buf_set_extmark(buf, M.multibuf__ns, clamp(region.start_row, 0, line_count - 1), 0, {
-				end_row = clamp(region.end_row + 1, 0, line_count),
-				end_right_gravity = true,
-			})
-		)
-	end
-	buf_info.pending_regions = nil
-	buf_info.loading = false
-
-	if not buf_listeners[buf] then
-		local id = vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-			buffer = buf,
-			callback = multibuf_buf_changed,
-		})
-		buf_listeners[buf] = { change_autocmd_id = id, multibufs = { mb } }
-	else
-		list_insert_unique(buf_listeners[buf].multibufs, mb)
-	end
-
-	return true
-end
-
---- @param mb integer
-local function process_pending_adds(mb)
-	local pending = pending_adds[mb]
-	if not pending or #pending == 0 then
-		pending_adds[mb] = nil
-		return
-	end
-
-	local info = multibufs[mb]
-	if not info then
-		pending_adds[mb] = nil
-		return
-	end
-
-	-- For visibility-based loading, we just add them as "unloaded" entries
-	for _, opts in ipairs(pending) do
-		table.insert(info.bufs, {
-			buf = opts.buf,
-			source_extmark_ids = {},
-			region_extmark_ids = {},
-			virt_expand_extmark_ids = {},
-			pending_regions = opts.regions,
-			title = opts.title,
-			id = opts.id,
-		})
-	end
-
-	pending_adds[mb] = nil
-	M.multibuf_reload(mb)
-end
-
---- @param buf integer
---- @return integer|nil
-local function get_buf_win(buf)
-	local cur_win = vim.api.nvim_get_current_win()
-	if vim.api.nvim_win_get_buf(cur_win) == buf then
-		return cur_win
-	end
-	for _, win in ipairs(vim.api.nvim_list_wins()) do
-		if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
-			return win
-		end
-	end
-	return nil
-end
-
---- @param win integer|nil
---- @return integer
-local function get_signcolumn_width(win)
-	local sc
-	if win and vim.api.nvim_win_is_valid(win) then
-		sc = vim.api.nvim_get_option_value("signcolumn", { win = win })
-	else
-		sc = vim.api.nvim_get_option_value("signcolumn", { scope = "global" })
-	end
-
-	if sc == "no" then
-		return 0
-	end
-
-	local width_str = sc:match(":(%d+)$")
-	if width_str then
-		return tonumber(width_str)
-	end
-
-	return 1
-end
-
---- Generates 2-digit sign strings for line numbers
---- @param line_num integer
---- @param width_columns integer
---- @return string[]
-local function get_line_number_signs(line_num, width_columns)
-	local str = tostring(line_num)
-	local width_cells = width_columns * 2
-	if #str < width_cells then
-		str = str .. " "
-	end
-
-	local result = {}
-	for i = #str, 1, -2 do
-		local start = math.max(1, i - 1)
-		local chunk = str:sub(start, i)
-		if #chunk == 1 then
-			chunk = " " .. chunk
-		end
-		table.insert(result, 1, chunk)
-	end
-	return result
-end
-
 --- @param buf integer
 --- @param extmark integer
 --- @return integer|nil, integer|nil
@@ -316,6 +185,139 @@ local function merge_buffer_regions(b_info)
 			)
 		end
 	end
+end
+
+--- @param mb integer
+--- @param buf_info MultibufBufInfo
+local function load_source_buf(mb, buf_info)
+	local buf = buf_info.buf
+	if vim.api.nvim_buf_is_loaded(buf) and #buf_info.source_extmark_ids > 0 then
+		buf_info.loading = false
+		return false
+	end
+
+	vim.fn.bufload(buf)
+
+	local line_count = vim.api.nvim_buf_line_count(buf)
+	local regions = buf_info.pending_regions or {}
+	buf_info.source_extmark_ids = {}
+
+	for _, region in ipairs(regions) do
+		table.insert(
+			buf_info.source_extmark_ids,
+			vim.api.nvim_buf_set_extmark(buf, M.multibuf__ns, clamp(region.start_row, 0, line_count - 1), 0, {
+				end_row = clamp(region.end_row + 1, 0, line_count),
+				end_right_gravity = true,
+			})
+		)
+	end
+	buf_info.pending_regions = nil
+	buf_info.loading = false
+
+	if not buf_listeners[buf] then
+		local id = vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+			buffer = buf,
+			callback = multibuf_buf_changed,
+		})
+		buf_listeners[buf] = { change_autocmd_id = id, multibufs = { mb } }
+	else
+		list_insert_unique(buf_listeners[buf].multibufs, mb)
+	end
+
+	return true
+end
+
+--- @param mb integer
+local function process_pending_adds(mb)
+	local pending = pending_adds[mb]
+	if not pending or #pending == 0 then
+		pending_adds[mb] = nil
+		return
+	end
+
+	local info = multibufs[mb]
+	if not info then
+		pending_adds[mb] = nil
+		return
+	end
+
+	-- For visibility-based loading, we just add them as "unloaded" entries
+	for _, opts in ipairs(pending) do
+		local b_info = {
+			buf = opts.buf,
+			source_extmark_ids = {},
+			region_extmark_ids = {},
+			virt_expand_extmark_ids = {},
+			pending_regions = opts.regions,
+			title = opts.title,
+			id = opts.id,
+		}
+		merge_buffer_regions(b_info)
+		table.insert(info.bufs, b_info)
+	end
+
+	pending_adds[mb] = nil
+	M.multibuf_reload(mb)
+end
+
+--- @param buf integer
+--- @return integer|nil
+local function get_buf_win(buf)
+	local cur_win = vim.api.nvim_get_current_win()
+	if vim.api.nvim_win_get_buf(cur_win) == buf then
+		return cur_win
+	end
+	for _, win in ipairs(vim.api.nvim_list_wins()) do
+		if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
+			return win
+		end
+	end
+	return nil
+end
+
+--- @param win integer|nil
+--- @return integer
+local function get_signcolumn_width(win)
+	local sc
+	if win and vim.api.nvim_win_is_valid(win) then
+		sc = vim.api.nvim_get_option_value("signcolumn", { win = win })
+	else
+		sc = vim.api.nvim_get_option_value("signcolumn", { scope = "global" })
+	end
+
+	if sc == "no" then
+		return 0
+	end
+
+	local width_str = sc:match(":(%d+)$")
+	if width_str then
+		return tonumber(width_str)
+	end
+
+	return 1
+end
+
+--- Generates 2-digit sign strings for line numbers
+--- @param line_num integer
+--- @param width_columns integer
+--- @return string[]
+local function get_line_number_signs(line_num, width_columns)
+	local str = tostring(line_num)
+	local width_cells = width_columns * 2
+	if #str < width_cells then
+		str = str .. " "
+	end
+
+	local result = {}
+	for i = #str, 1, -2 do
+		local start = math.max(1, i - 1)
+		local chunk = str:sub(start, i)
+		if #chunk == 1 then
+			chunk = " " .. chunk
+		end
+		table.insert(result, 1, chunk)
+	end
+	return result
 end
 
 --- @param mb integer
@@ -655,69 +657,78 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 
 			local last_s_end = 0
 			local source_line_count = vim.api.nvim_buf_line_count(buf_info.buf)
-			local num_slices = buf_info.pending_regions and #buf_info.pending_regions or #buf_info.source_extmark_ids
-			for s_idx = 1, num_slices do
-				local s_start, s_end
-				if buf_info.pending_regions then
-					local region = buf_info.pending_regions[s_idx]
-					s_start, s_end = region.start_row, region.end_row + 1
-				else
-					s_start, s_end = get_extmark_range(buf_info.buf, buf_info.source_extmark_ids[s_idx])
+
+			local slices = {}
+			if buf_info.pending_regions then
+				for _, r in ipairs(buf_info.pending_regions) do
+					table.insert(slices, { s = r.start_row, e = r.end_row + 1 })
 				end
+			else
+				for _, sid in ipairs(buf_info.source_extmark_ids) do
+					local s, e = get_extmark_range(buf_info.buf, sid)
+					if s then
+						table.insert(slices, { s = s, e = e })
+					end
+				end
+			end
 
-				if s_start and s_end then
-					local slice_len = s_end - s_start
+			for s_idx, slice in ipairs(slices) do
+				local s_start, s_end = slice.s, slice.e
+				local slice_len = s_end - s_start
+				local next_s_start = slices[s_idx + 1] and slices[s_idx + 1].s or source_line_count
 
-					-- Signs on visible lines
-					for i = 0, slice_len - 1 do
-						local special_sign = nil
-						if sc_width > 0 then
-							local is_first = (i == 0)
-							local is_last = (i == slice_len - 1)
-							local needs_above = is_first and (s_start > 0)
-							local needs_below = is_last and (s_end < source_line_count)
+				-- Signs on visible lines
+				for i = 0, slice_len - 1 do
+					local special_sign = nil
+					if sc_width > 0 then
+						local is_first = (i == 0)
+						local is_last = (i == slice_len - 1)
+						local has_gap_above = (s_start > last_s_end)
+						local has_gap_below = (s_end < next_s_start)
 
-							if needs_above and needs_below then
-								special_sign = get_expander_sign("both")
-							elseif needs_above then
-								special_sign = get_expander_sign("above")
-							elseif needs_below then
-								special_sign = get_expander_sign("below")
-							end
+						local needs_above = is_first and has_gap_above
+						local needs_below = is_last and has_gap_below
+
+						if needs_above and needs_below then
+							special_sign = get_expander_sign("both")
+						elseif needs_above then
+							special_sign = get_expander_sign("above")
+						elseif needs_below then
+							special_sign = get_expander_sign("below")
 						end
-						place_line_number_signs(multibuf, current_lnum + i, s_start + i, sc_width, special_sign)
 					end
-
-					-- Gap renderer above
-					if s_start > last_s_end then
-						place_expander(multibuf, current_lnum, {
-							expand_direction = (s_idx == 1) and "above" or "both",
-							count = s_start - last_s_end,
-							window = win or 0,
-							bufnr = buf_info.buf,
-							start_row = last_s_end,
-						})
-					end
-
-					-- Gap renderer below (only for last slice of buffer)
-					if (s_idx == num_slices) and (s_end < source_line_count) then
-						place_expander(multibuf, current_lnum + slice_len - 1, {
-							expand_direction = "below",
-							count = source_line_count - s_end,
-							window = win or 0,
-							bufnr = buf_info.buf,
-							start_row = s_end,
-						})
-					end
-
-					buf_info.region_extmark_ids[s_idx] =
-						vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, current_lnum, 0, {
-							end_row = current_lnum + slice_len,
-							end_right_gravity = true,
-						})
-
-					current_lnum, last_s_end, virt_expand_idx = current_lnum + slice_len, s_end, virt_expand_idx + 1
+					place_line_number_signs(multibuf, current_lnum + i, s_start + i, sc_width, special_sign)
 				end
+
+				-- Gap renderer above
+				if s_start > last_s_end then
+					place_expander(multibuf, current_lnum, {
+						expand_direction = (s_idx == 1) and "above" or "both",
+						count = s_start - last_s_end,
+						window = win or 0,
+						bufnr = buf_info.buf,
+						start_row = last_s_end,
+					})
+				end
+
+				-- Gap renderer below (only for last slice of buffer)
+				if (s_idx == #slices) and (s_end < source_line_count) then
+					place_expander(multibuf, current_lnum + slice_len - 1, {
+						expand_direction = "below",
+						count = source_line_count - s_end,
+						window = win or 0,
+						bufnr = buf_info.buf,
+						start_row = s_end,
+					})
+				end
+
+				buf_info.region_extmark_ids[s_idx] =
+					vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, current_lnum, 0, {
+						end_row = current_lnum + slice_len,
+						end_right_gravity = true,
+					})
+
+				current_lnum, last_s_end, virt_expand_idx = current_lnum + slice_len, s_end, virt_expand_idx + 1
 			end
 		end
 	end
