@@ -34,6 +34,8 @@
 --- @field expander_max_lines integer? Max lines to show as dimmed text in expander
 --- @field expander_signs { above: string, below: string, both: string }|nil
 --- @field expander_sign_hl string|nil
+--- @field region_hl_even string|nil
+--- @field region_hl_odd string|nil
 
 --- @class multibuffer.RenderExpandLinesOptions
 --- @field expand_direction "above"|"below"|"both"
@@ -75,6 +77,19 @@ local function clamp(num, min, max)
 	return num
 end
 
+--- @param color integer
+--- @param amount integer
+--- @return integer
+local function adjust_color(color, amount)
+	local r = math.floor(color / 0x10000)
+	local g = math.floor((color % 0x10000) / 0x100)
+	local b = color % 0x100
+	r = math.min(255, math.max(0, r + amount))
+	g = math.min(255, math.max(0, g + amount))
+	b = math.min(255, math.max(0, b + amount))
+	return r * 0x10000 + g * 0x100 + b
+end
+
 local M = {
 	--- @type MultibufSetupOptions
 	user_opts = {
@@ -84,6 +99,8 @@ local M = {
 			both = "↕",
 		},
 		expander_sign_hl = "Folded",
+		region_hl_even = "MultibufRegionEven",
+		region_hl_odd = "MultibufRegionOdd",
 	},
 	--- @type integer Namespace for structural elements (signs, titles)
 	multibuf__ns = nil,
@@ -425,7 +442,9 @@ end
 --- @param source_row integer
 --- @param width integer?
 --- @param special_sign string?
-local function place_line_number_signs(multibuf, target_row, source_row, width, special_sign)
+--- @param line_nr_hl string
+--- @param expander_hl string
+local function place_line_number_signs(multibuf, target_row, source_row, width, special_sign, line_nr_hl, expander_hl)
 	local signs = get_line_number_signs(source_row + 1, width or 1)
 	if width then
 		while #signs < width do
@@ -437,7 +456,7 @@ local function place_line_number_signs(multibuf, target_row, source_row, width, 
 	if special_sign and width and width > 0 then
 		vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
 			sign_text = special_sign,
-			sign_hl_group = M.user_opts.expander_sign_hl or "Folded",
+			sign_hl_group = expander_hl,
 			priority = 1000,
 		})
 		start_idx = 2
@@ -446,7 +465,7 @@ local function place_line_number_signs(multibuf, target_row, source_row, width, 
 	for i = start_idx, #signs do
 		vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
 			sign_text = signs[i],
-			sign_hl_group = "LineNr",
+			sign_hl_group = line_nr_hl,
 			priority = 100 - i,
 		})
 	end
@@ -627,6 +646,7 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 	local current_lnum = #header
 	local virt_expand_idx = 1
 	local name_idx_cursor = 1
+	local global_slice_idx = 0
 
 	local function get_expander_sign(direction)
 		local signs = M.user_opts.expander_signs or {}
@@ -677,6 +697,12 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 				local slice_len = s_end - s_start
 				local next_s_start = slices[s_idx + 1] and slices[s_idx + 1].s or source_line_count
 
+				global_slice_idx = global_slice_idx + 1
+				local is_odd = (global_slice_idx % 2 ~= 0)
+				local region_hl = is_odd and M.user_opts.region_hl_odd or M.user_opts.region_hl_even
+				local line_nr_hl = is_odd and "MultibufLineNrOdd" or "MultibufLineNrEven"
+				local expander_hl = is_odd and "MultibufExpanderOdd" or "MultibufExpanderEven"
+
 				-- Signs on visible lines
 				for i = 0, slice_len - 1 do
 					local special_sign = nil
@@ -697,7 +723,15 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 							special_sign = get_expander_sign("below")
 						end
 					end
-					place_line_number_signs(multibuf, current_lnum + i, s_start + i, sc_width, special_sign)
+					place_line_number_signs(
+						multibuf,
+						current_lnum + i,
+						s_start + i,
+						sc_width,
+						special_sign,
+						line_nr_hl,
+						expander_hl
+					)
 				end
 
 				-- Gap renderer above
@@ -726,6 +760,7 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 					vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, current_lnum, 0, {
 						end_row = current_lnum + slice_len,
 						end_right_gravity = true,
+						line_hl_group = region_hl,
 					})
 
 				current_lnum, last_s_end, virt_expand_idx = current_lnum + slice_len, s_end, virt_expand_idx + 1
@@ -756,6 +791,44 @@ function M.setup(opts)
 	M.user_opts = vim.tbl_deep_extend("force", M.user_opts, opts)
 	M.multibuf__ns = vim.api.nvim_create_namespace("Multibuf")
 	M.multibuf_hl_ns = vim.api.nvim_create_namespace("MultibufHighlights")
+
+	local function update_highlights()
+		-- Define default highlight groups if they don't exist
+		if vim.fn.hlexists("MultibufRegionEven") == 0 then
+			vim.api.nvim_set_hl(0, "MultibufRegionEven", { link = "Normal" })
+		end
+		if vim.fn.hlexists("MultibufRegionOdd") == 0 then
+			local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+			if normal.bg then
+				local amount = vim.o.background == "dark" and 8 or -8
+				local new_bg = adjust_color(normal.bg, amount)
+				vim.api.nvim_set_hl(0, "MultibufRegionOdd", { bg = new_bg })
+			else
+				vim.api.nvim_set_hl(0, "MultibufRegionOdd", { link = "CursorLine" })
+			end
+		end
+
+		local even_bg = vim.api.nvim_get_hl(0, { name = "MultibufRegionEven", link = false }).bg
+		local odd_bg = vim.api.nvim_get_hl(0, { name = "MultibufRegionOdd", link = false }).bg
+		local line_nr = vim.api.nvim_get_hl(0, { name = "LineNr", link = false })
+		local folded = vim.api.nvim_get_hl(0, { name = M.user_opts.expander_sign_hl or "Folded", link = false })
+
+		vim.api.nvim_set_hl(0, "MultibufLineNrEven", { fg = line_nr.fg, bg = even_bg, bold = line_nr.bold })
+		vim.api.nvim_set_hl(0, "MultibufLineNrOdd", { fg = line_nr.fg, bg = odd_bg, bold = line_nr.bold })
+		vim.api.nvim_set_hl(0, "MultibufExpanderEven", { fg = folded.fg, bg = even_bg, bold = folded.bold })
+		vim.api.nvim_set_hl(0, "MultibufExpanderOdd", { fg = folded.fg, bg = odd_bg, bold = folded.bold })
+	end
+
+	update_highlights()
+
+	vim.api.nvim_create_autocmd({ "ColorScheme", "OptionSet" }, {
+		callback = function(args)
+			if args.event == "OptionSet" and args.match ~= "background" then
+				return
+			end
+			update_highlights()
+		end,
+	})
 
 	-- Decoration provider mirrors source highlights into the multibuffer viewport
 	local function incremental_load_source_and_update(multibuf, top, bot)
