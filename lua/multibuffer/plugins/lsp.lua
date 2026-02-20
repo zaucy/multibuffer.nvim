@@ -76,7 +76,7 @@ function M.goto_definition()
 
 		if result then
 			if not vim.isarray(result) then
-				table.insert(result)
+				table.insert(locations, result)
 			else
 				locations = result
 			end
