@@ -459,6 +459,7 @@ local function place_line_number_signs(multibuf, target_row, source_row, width, 
 		vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
 			sign_text = special_sign,
 			sign_hl_group = expander_hl,
+			cursorline_hl_group = "MultibufExpanderCursorLine",
 			priority = 1000,
 		})
 		start_idx = 2
@@ -468,6 +469,7 @@ local function place_line_number_signs(multibuf, target_row, source_row, width, 
 		vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, target_row, 0, {
 			sign_text = signs[i],
 			sign_hl_group = line_nr_hl,
+			cursorline_hl_group = "MultibufLineNrCursorLine",
 			priority = 100 - i,
 		})
 	end
@@ -762,8 +764,6 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 					vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, current_lnum, 0, {
 						end_row = current_lnum + slice_len,
 						end_right_gravity = true,
-						line_hl_group = region_hl,
-						priority = 10, -- Low priority to allow CursorLine to show through
 					})
 
 				current_lnum, last_s_end, virt_expand_idx = current_lnum + slice_len, s_end, virt_expand_idx + 1
@@ -815,17 +815,48 @@ function M.setup(opts)
 			vim.api.nvim_set_hl(0, "MultibufRegionOdd", { link = "CursorLine", default = true })
 		end
 
+		local function get_hl_attr(name, attr)
+			local hl = vim.api.nvim_get_hl(0, { name = name, link = false })
+			if hl[attr] then
+				return hl[attr]
+			end
+			-- fallback to Normal
+			if name ~= "Normal" then
+				return normal[attr]
+			end
+			return nil
+		end
+
 		-- These groups MUST be redefined on every colorscheme change because they
 		-- depend on the colors of Normal, LineNr, and Folded which just changed.
-		local even_bg = vim.api.nvim_get_hl(0, { name = "MultibufRegionEven", link = false }).bg
-		local odd_bg = vim.api.nvim_get_hl(0, { name = "MultibufRegionOdd", link = false }).bg
+		local even_bg = get_hl_attr("MultibufRegionEven", "bg")
+		local odd_bg = get_hl_attr("MultibufRegionOdd", "bg")
+		local line_nr_fg = get_hl_attr("LineNr", "fg")
+		local folded_fg = get_hl_attr(M.user_opts.expander_sign_hl or "Folded", "fg")
 		local line_nr = vim.api.nvim_get_hl(0, { name = "LineNr", link = false })
 		local folded = vim.api.nvim_get_hl(0, { name = M.user_opts.expander_sign_hl or "Folded", link = false })
+		local cursor_line = vim.api.nvim_get_hl(0, { name = "CursorLine", link = false })
 
-		vim.api.nvim_set_hl(0, "MultibufLineNrEven", { fg = line_nr.fg, bg = even_bg, bold = line_nr.bold })
-		vim.api.nvim_set_hl(0, "MultibufLineNrOdd", { fg = line_nr.fg, bg = odd_bg, bold = line_nr.bold })
-		vim.api.nvim_set_hl(0, "MultibufExpanderEven", { fg = folded.fg, bg = even_bg, bold = folded.bold })
-		vim.api.nvim_set_hl(0, "MultibufExpanderOdd", { fg = folded.fg, bg = odd_bg, bold = folded.bold })
+		vim.api.nvim_set_hl(0, "MultibufLineNrEven", { fg = line_nr_fg, bg = even_bg, bold = line_nr.bold })
+		vim.api.nvim_set_hl(0, "MultibufLineNrOdd", { fg = line_nr_fg, bg = odd_bg, bold = line_nr.bold })
+		vim.api.nvim_set_hl(0, "MultibufExpanderEven", { fg = folded_fg, bg = even_bg, bold = folded.bold })
+		vim.api.nvim_set_hl(0, "MultibufExpanderOdd", { fg = folded_fg, bg = odd_bg, bold = folded.bold })
+
+		-- Sign column highlights when cursor is on the line (CursorLine background)
+		vim.api.nvim_set_hl(0, "MultibufLineNrCursorLine", {
+			fg = line_nr_fg,
+			bg = cursor_line.bg,
+			bold = line_nr.bold,
+			sp = cursor_line.sp,
+			special = cursor_line.special,
+		})
+		vim.api.nvim_set_hl(0, "MultibufExpanderCursorLine", {
+			fg = folded_fg,
+			bg = cursor_line.bg,
+			bold = folded.bold,
+			sp = cursor_line.sp,
+			special = cursor_line.special,
+		})
 	end
 
 	update_highlights()
@@ -840,7 +871,7 @@ function M.setup(opts)
 	})
 
 	-- Decoration provider mirrors source highlights into the multibuffer viewport
-	local function incremental_load_source_and_update(multibuf, top, bot)
+	local function incremental_load_source_and_update(winid, multibuf, top, bot)
 		if not M.multibuf_is_valid(multibuf) then
 			return false
 		end
@@ -852,11 +883,28 @@ function M.setup(opts)
 		local need_loadbufs = {}
 
 		local slice_lookup = {}
+		local global_slice_idx = 0
 		for _, b_info in ipairs(info.bufs) do
-			for i, reg_id in ipairs(b_info.region_extmark_ids) do
-				slice_lookup[reg_id] = { b_info = b_info, slice_idx = i }
+			local has_content = false
+			if b_info.pending_regions and #b_info.pending_regions > 0 then
+				has_content = true
+			elseif #b_info.source_extmark_ids > 0 then
+				has_content = true
+			end
+			if has_content then
+				for i, reg_id in ipairs(b_info.region_extmark_ids) do
+					global_slice_idx = global_slice_idx + 1
+					local is_odd = (global_slice_idx % 2 ~= 0)
+					local region_hl = is_odd and M.user_opts.region_hl_odd or M.user_opts.region_hl_even
+					slice_lookup[reg_id] = { b_info = b_info, slice_idx = i, region_hl = region_hl }
+				end
 			end
 		end
+
+		local cursor_row = -1
+		pcall(function()
+			cursor_row = vim.api.nvim_win_get_cursor(winid)[1] - 1
+		end)
 
 		local slices = vim.api.nvim_buf_get_extmarks(
 			multibuf,
@@ -870,6 +918,7 @@ function M.setup(opts)
 			if lookup then
 				local b_info = lookup.b_info
 				local i = lookup.slice_idx
+				local region_hl = lookup.region_hl
 
 				if b_info.pending_regions then
 					if not b_info.loading then
@@ -884,24 +933,44 @@ function M.setup(opts)
 					goto next_extmark
 				end
 
-				local s_ext_id = b_info.source_extmark_ids[i]
-				if not s_ext_id then
-					goto next_extmark
-				end
-				local s_start, _ = get_extmark_range(b_info.buf, s_ext_id)
-				if not s_start then
-					goto next_extmark
-				end
-
 				local v_start, v_end = math.max(top, r_start), math.min(bot + 1, r_end)
 				if v_start < v_end then
-					local s_range_start = s_start + (v_start - r_start)
-					local s_range_end = s_range_start + (v_end - v_start)
+					-- 1. Apply alternating background (skipping cursor line)
+					local function set_region_hl(s, e)
+						if s >= e then
+							return
+						end
+						pcall(vim.api.nvim_buf_set_extmark, multibuf, M.multibuf_hl_ns, s, 0, {
+							end_row = e,
+							hl_group = region_hl,
+							hl_eol = true,
+							line_hl_group = region_hl,
+							ephemeral = true,
+							priority = 0,
+						})
+					end
 
-					local s_ft = vim.api.nvim_get_option_value("filetype", { buf = b_info.buf })
-					local s_lang = vim.treesitter.language.get_lang(s_ft)
-					if s_lang then
-						project_highlights(multibuf, b_info.buf, s_range_start, s_range_end, v_start)
+					if cursor_row >= v_start and cursor_row < v_end then
+						set_region_hl(v_start, cursor_row)
+						set_region_hl(cursor_row + 1, v_end)
+					else
+						set_region_hl(v_start, v_end)
+					end
+
+					-- 2. Project highlights from source
+					local s_ext_id = b_info.source_extmark_ids[i]
+					if s_ext_id then
+						local s_start, _ = get_extmark_range(b_info.buf, s_ext_id)
+						if s_start then
+							local s_range_start = s_start + (v_start - r_start)
+							local s_range_end = s_range_start + (v_end - v_start)
+
+							local s_ft = vim.api.nvim_get_option_value("filetype", { buf = b_info.buf })
+							local s_lang = vim.treesitter.language.get_lang(s_ft)
+							if s_lang then
+								project_highlights(multibuf, b_info.buf, s_range_start, s_range_end, v_start)
+							end
+						end
 					end
 				end
 			end
@@ -922,8 +991,8 @@ function M.setup(opts)
 	end
 
 	vim.api.nvim_set_decoration_provider(M.multibuf_hl_ns, {
-		on_win = function(_, _, multibuf, top, bot)
-			return incremental_load_source_and_update(multibuf, top, bot)
+		on_win = function(_, winid, multibuf, top, bot)
+			return incremental_load_source_and_update(winid, multibuf, top, bot)
 		end,
 	})
 end
