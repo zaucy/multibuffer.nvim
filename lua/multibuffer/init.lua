@@ -36,6 +36,7 @@
 --- @field expander_sign_hl string|nil
 --- @field region_hl_even string|nil
 --- @field region_hl_odd string|nil
+--- @field region_hl_odd_adjust integer|nil Contrast intensity for default odd region backgrounds. Higher values increase intensity/contrast. (default 12)
 
 --- @class multibuffer.RenderExpandLinesOptions
 --- @field expand_direction "above"|"below"|"both"
@@ -101,6 +102,7 @@ local M = {
 		expander_sign_hl = "Folded",
 		region_hl_even = "MultibufRegionEven",
 		region_hl_odd = "MultibufRegionOdd",
+		region_hl_odd_adjust = 12,
 	},
 	--- @type integer Namespace for structural elements (signs, titles)
 	multibuf__ns = nil,
@@ -802,10 +804,10 @@ function M.setup(opts)
 		local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
 		if normal.bg then
 			-- Always try to make it darker (subtract from RGB values)
-			local amount = -12
+			local amount = -(M.user_opts.region_hl_odd_adjust or 12)
 			-- If background is already extremely dark (black), we have to go lighter
 			if vim.o.background == "dark" and normal.bg < 0x101010 then
-				amount = 12
+				amount = math.abs(amount)
 			end
 			local new_bg = adjust_color(normal.bg, amount)
 			vim.api.nvim_set_hl(0, "MultibufRegionOdd", { bg = new_bg, default = true })
