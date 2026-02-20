@@ -761,6 +761,7 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 						end_row = current_lnum + slice_len,
 						end_right_gravity = true,
 						line_hl_group = region_hl,
+						priority = 10, -- Low priority to allow CursorLine to show through
 					})
 
 				current_lnum, last_s_end, virt_expand_idx = current_lnum + slice_len, s_end, virt_expand_idx + 1
@@ -800,7 +801,12 @@ function M.setup(opts)
 		if vim.fn.hlexists("MultibufRegionOdd") == 0 then
 			local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
 			if normal.bg then
-				local amount = vim.o.background == "dark" and 8 or -8
+				-- Always try to make it darker (subtract from RGB values)
+				local amount = -12
+				-- If background is already extremely dark (black), we have to go lighter
+				if vim.o.background == "dark" and normal.bg < 0x101010 then
+					amount = 12
+				end
 				local new_bg = adjust_color(normal.bg, amount)
 				vim.api.nvim_set_hl(0, "MultibufRegionOdd", { bg = new_bg })
 			else
