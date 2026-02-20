@@ -794,26 +794,27 @@ function M.setup(opts)
 	M.multibuf_hl_ns = vim.api.nvim_create_namespace("MultibufHighlights")
 
 	local function update_highlights()
-		-- Define default highlight groups if they don't exist
-		if vim.fn.hlexists("MultibufRegionEven") == 0 then
-			vim.api.nvim_set_hl(0, "MultibufRegionEven", { link = "Normal" })
-		end
-		if vim.fn.hlexists("MultibufRegionOdd") == 0 then
-			local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
-			if normal.bg then
-				-- Always try to make it darker (subtract from RGB values)
-				local amount = -12
-				-- If background is already extremely dark (black), we have to go lighter
-				if vim.o.background == "dark" and normal.bg < 0x101010 then
-					amount = 12
-				end
-				local new_bg = adjust_color(normal.bg, amount)
-				vim.api.nvim_set_hl(0, "MultibufRegionOdd", { bg = new_bg })
-			else
-				vim.api.nvim_set_hl(0, "MultibufRegionOdd", { link = "CursorLine" })
+		-- Define default highlight groups
+		-- We use 'default = true' so users can override them in their config,
+		-- but we always attempt to define them to ensure they exist and are up to date.
+		vim.api.nvim_set_hl(0, "MultibufRegionEven", { link = "Normal", default = true })
+
+		local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+		if normal.bg then
+			-- Always try to make it darker (subtract from RGB values)
+			local amount = -12
+			-- If background is already extremely dark (black), we have to go lighter
+			if vim.o.background == "dark" and normal.bg < 0x101010 then
+				amount = 12
 			end
+			local new_bg = adjust_color(normal.bg, amount)
+			vim.api.nvim_set_hl(0, "MultibufRegionOdd", { bg = new_bg, default = true })
+		else
+			vim.api.nvim_set_hl(0, "MultibufRegionOdd", { link = "CursorLine", default = true })
 		end
 
+		-- These groups MUST be redefined on every colorscheme change because they
+		-- depend on the colors of Normal, LineNr, and Folded which just changed.
 		local even_bg = vim.api.nvim_get_hl(0, { name = "MultibufRegionEven", link = false }).bg
 		local odd_bg = vim.api.nvim_get_hl(0, { name = "MultibufRegionOdd", link = false }).bg
 		local line_nr = vim.api.nvim_get_hl(0, { name = "LineNr", link = false })
