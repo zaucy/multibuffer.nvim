@@ -111,7 +111,7 @@ function M.multibuf_workspace_symbols(default_query)
 
 	local buf = vim.api.nvim_get_current_buf()
 	local clients = vim.lsp.get_clients({
-		bufnr = buf,
+		-- bufnr = buf,
 		method = "workspace/symbol",
 	})
 
@@ -128,14 +128,14 @@ function M.multibuf_workspace_symbols(default_query)
 
 	--- @type number|nil
 	local mbuf = nil
+	local done_requests = 0
+	local found_count = 0
 
 	--- @param client vim.lsp.Client
 	--- @param err lsp.ResponseError|nil
 	--- @param result lsp.WorkspaceSymbol[]|nil
 	local function workspace_symbol_handler(client, err, result, context, config)
 		assert(mbuf)
-
-		api.multibuf_clear_bufs(mbuf)
 
 		if not result then
 			assert(mbuf)
@@ -174,24 +174,32 @@ function M.multibuf_workspace_symbols(default_query)
 
 		api.multibuf_add_bufs(mbuf, add_buf_opts)
 
-		api.multibuf_set_header(mbuf, {
-			"",
-			"",
-			"",
-			string.format("found %i workspace symbols", #result),
-		})
+		found_count = found_count + #result
+
+		if done_requests == #clients then
+			api.multibuf_set_header(mbuf, {
+				"",
+				"",
+				"",
+				string.format("found %i workspace symbols", found_count),
+			})
+		end
 	end
 
 	mbuf = require("multibuffer.plugins.generic").multibuf_generic_search({
 		default_input = default_query,
 		on_input_changed = function(query)
 			assert(mbuf, "on_input_changed called before search buffer was created")
+			api.multibuf_clear_bufs(mbuf)
 
 			for client_index, req_id in ipairs(last_client_request_ids) do
 				if req_id ~= -1 then
 					clients[client_index]:cancel_request(req_id)
 				end
 			end
+
+			done_requests = 0
+			found_count = 0
 
 			api.multibuf_set_header(mbuf, {
 				"",
@@ -209,6 +217,7 @@ function M.multibuf_workspace_symbols(default_query)
 					"workspace/symbol",
 					params,
 					function(err, result, context, config)
+						done_requests = done_requests + 1
 						if context.request_id then
 							-- don't leave lingering request id so we don't send
 							-- cancel rquest for requests that are already
@@ -222,6 +231,8 @@ function M.multibuf_workspace_symbols(default_query)
 
 				if success then
 					last_client_request_ids[client_index] = req_id
+				else
+					done_requests = done_requests + 1
 				end
 			end
 		end,
