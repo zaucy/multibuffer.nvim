@@ -1094,21 +1094,12 @@ function M.create_multibuf(opts)
 					end
 
 					if found_b_idx and found_s_idx then
-						if _G.MB_DEBUG then
-							print("Found dirty region", mark_id, "mapped to", found_b_idx, found_s_idx)
-						end
 						local b = b_info.bufs[found_b_idx]
 						local sid = b.source_extmark_ids[found_s_idx]
 						
 						-- if sid is nil but b.pending_regions exists, it means the buffer isn't fully loaded yet!
 						-- Let's check if there are pending regions instead of source extmark ids
 						if not sid and b.pending_regions and b.pending_regions[found_s_idx] then
-							-- wait, if it's still pending, it means we edited a loading buffer. 
-							-- this shouldn't happen because reloading turns pending into source extmarks.
-							-- BUT wait, process_pending_adds makes it pending. `multibuf_reload` does NOT turn it into source extmarks immediately!
-							-- `incremental_load_source_and_update` does it when it's scrolled into view.
-							-- Wait, if it's headless, it's not scrolled into view!
-							-- So it never loaded the source buffer!
 							load_source_buf(args.buf, b)
 							sid = b.source_extmark_ids[found_s_idx]
 						end
@@ -1117,56 +1108,18 @@ function M.create_multibuf(opts)
 						if result_mb and result_mb[1] then
 							local rs = result_mb[1]
 							local re = result_mb[3].end_row
-							if _G.MB_DEBUG then
-								print("Found MB extmark", rs, re)
-							end
 							
-							-- If the region ends up empty (re <= rs) and we know lines were edited inside it,
-							-- we may need to recalculate the bounds if the user deleted all lines of the region or typed
-							-- over the whole region.
-							
-							if _G.MB_DEBUG then
-								print("sid is ", vim.inspect(sid))
-							end
 							if sid then
 								local result_src = nil
 								if type(sid) == "number" then
-									-- The extmark might have been deleted if all text was replaced, try to get it, or fallback
-									-- wait, if nvim_buf_get_extmark_by_id fails, it returns {}
 									result_src = vim.api.nvim_buf_get_extmark_by_id(b.buf, M.multibuf__ns, sid, { details = true })
-								end
-								if _G.MB_DEBUG then
-									print("result_src for " .. tostring(sid) .. " in buf " .. b.buf .. " is ", vim.inspect(result_src))
 								end
 								if result_src and result_src[1] then
 									local ss = result_src[1]
 									local se = result_src[3].end_row
-									if _G.MB_DEBUG then
-										print("Found SRC extmark", ss, se)
-									end
 									
 									local new_lines = vim.api.nvim_buf_get_lines(args.buf, rs, re, false)
 									local old_lines = vim.api.nvim_buf_get_lines(b.buf, ss, se, false)
-									
-									-- Debug print
-									local d_msg = string.format("Extmark: %s, mb_range: %s-%s, src_range: %s-%s", mark_id, rs, re, ss, se)
-									if _G.MB_DEBUG then
-										print(d_msg)
-										print("New lines: ", vim.inspect(new_lines))
-										print("Old lines: ", vim.inspect(old_lines))
-									end
-									
-									-- We only set lines if the lines changed inside this range
-									-- But wait, the test replaces lines 1 to 3 with "hello edited" and "world modified".
-									-- rs=1, re=3. `new_lines` is getting the lines.
-									-- Is it getting nothing? 
-									-- Because if it's getting nothing, new_lines ~= old_lines would be true, and it should print "Is equal? false"
-									-- But it is NOT printing "Found SRC extmark" at all?
-									-- Let's check the test output again.
-									-- "Found MB extmark 1 3" is printed.
-									-- "Found SRC extmark" is NOT printed!
-									-- This means `if result_src and result_src[1] then` is failing.
-									-- Why? Because `sid` is invalid or extmark is missing in `b.buf`!
 									
 									local equal = true
 									if #new_lines ~= #old_lines then
@@ -1180,45 +1133,37 @@ function M.create_multibuf(opts)
 										end
 									end
 
-									if _G.MB_DEBUG then
-										print("Is equal?", equal)
-									end
-
-										if not equal then
-											if #new_lines == 0 then new_lines = { "" } end
-											
-											if _G.MB_DEBUG then
-												print("Setting lines on buffer " .. b.buf .. " from " .. ss .. " to " .. se)
-											end
-											
-											b.ignore_source_changes = true
-											vim.api.nvim_buf_set_lines(b.buf, ss, se, false, new_lines)
-											
-											-- get the new length in case new_lines is just one empty string
-											local diff = #new_lines - (se - ss)
-											local new_se = se + diff
-											
-											-- The source buffer might have changed the extmark's end row if right_gravity applied.
-											-- Sometimes the extmark disappears if all text was removed and it couldn't shift properly.
-											-- So we strictly set it.
-											vim.api.nvim_buf_set_extmark(b.buf, M.multibuf__ns, ss, 0, {
-												id = sid,
-												end_row = new_se,
+									if not equal then
+										if #new_lines == 0 then new_lines = { "" } end
+										
+										b.ignore_source_changes = true
+										vim.api.nvim_buf_set_lines(b.buf, ss, se, false, new_lines)
+										
+										-- get the new length in case new_lines is just one empty string
+										local diff = #new_lines - (se - ss)
+										local new_se = se + diff
+										
+										-- The source buffer might have changed the extmark's end row if right_gravity applied.
+										-- Sometimes the extmark disappears if all text was removed and it couldn't shift properly.
+										-- So we strictly set it.
+										vim.api.nvim_buf_set_extmark(b.buf, M.multibuf__ns, ss, 0, {
+											id = sid,
+											end_row = new_se,
+											end_right_gravity = true,
+										})
+										b.ignore_source_changes = false
+										
+										-- Fix the multibuffer's own extmark if lines were added/removed
+										-- This ensures further edits before a reload still track properly
+										if diff ~= 0 then
+											vim.api.nvim_buf_set_extmark(args.buf, M.multibuf__ns, rs, 0, {
+												id = mark_id,
+												end_row = re + diff,
+												right_gravity = false,
 												end_right_gravity = true,
 											})
-											b.ignore_source_changes = false
-											
-											-- Fix the multibuffer's own extmark if lines were added/removed
-											-- This ensures further edits before a reload still track properly
-											if diff ~= 0 then
-												vim.api.nvim_buf_set_extmark(args.buf, M.multibuf__ns, rs, 0, {
-													id = mark_id,
-													end_row = re + diff,
-													right_gravity = false,
-													end_right_gravity = true,
-												})
-											end
 										end
+									end
 								end
 							end
 						end
