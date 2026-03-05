@@ -131,6 +131,9 @@ function M.multibuf_workspace_symbols(default_query)
 	local done_requests = 0
 	local found_count = 0
 
+	--- @type table<number, MultibufRegion[]>
+	local regions_by_bufnr = {}
+
 	--- @param client vim.lsp.Client
 	--- @param err lsp.ResponseError|nil
 	--- @param result lsp.WorkspaceSymbol[]|nil
@@ -152,9 +155,6 @@ function M.multibuf_workspace_symbols(default_query)
 			return
 		end
 
-		--- @type table<number, MultibufRegion[]>
-		local regions_by_bufnr = {}
-
 		for _, symbol in ipairs(result) do
 			local lnum = symbol.location.range.start.line
 			local symbol_bufnr = vim.uri_to_bufnr(symbol.location.uri)
@@ -162,6 +162,8 @@ function M.multibuf_workspace_symbols(default_query)
 			regions_by_bufnr[symbol_bufnr] = regions_by_bufnr[symbol_bufnr] or {}
 			table.insert(regions_by_bufnr[symbol_bufnr], { start_row = lnum, end_row = lnum })
 		end
+
+		api.multibuf_clear_bufs(mbuf)
 
 		local add_buf_opts = {}
 
@@ -181,7 +183,7 @@ function M.multibuf_workspace_symbols(default_query)
 				"",
 				"",
 				"",
-				string.format("found %i workspace symbols", found_count),
+				string.format("found %i workspace symbols (duplicates merged)", found_count),
 			})
 		end
 	end
@@ -200,6 +202,7 @@ function M.multibuf_workspace_symbols(default_query)
 
 			done_requests = 0
 			found_count = 0
+			regions_by_bufnr = {}
 
 			api.multibuf_set_header(mbuf, {
 				"",
