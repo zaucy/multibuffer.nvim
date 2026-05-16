@@ -1140,8 +1140,8 @@ function M.multibuf__wipeout(buf)
 end
 
 --- @param mb integer
---- @param line integer 0-indexed line in multibuffer
---- @return integer|nil bufnr, integer|nil source_line
+--- @param line integer 0-indexed line in multibuffer (e.g. vim.api.nvim_win_get_cursor(0)[1] - 1)
+--- @return integer|nil bufnr, integer|nil source_line 0-indexed source line (needs +1 for nvim_win_set_cursor)
 function M.multibuf_get_buf_at_line(mb, line)
 	local info = multibufs[mb]
 	if not info then
@@ -1158,8 +1158,8 @@ function M.multibuf_get_buf_at_line(mb, line)
 		for _, b in ipairs(info.bufs) do
 			for i, rid in ipairs(b.region_extmark_ids) do
 				if m[1] == rid then
-					local rs, _ = get_extmark_range(mb, rid)
-					if not rs then
+					local rs, re = get_extmark_range(mb, rid)
+					if not rs or line >= re then
 						goto next_mark
 					end
 					local sid = b.source_extmark_ids and b.source_extmark_ids[i]
@@ -1176,6 +1176,22 @@ function M.multibuf_get_buf_at_line(mb, line)
 			end
 		end
 		::next_mark::
+	end
+	return nil, nil
+end
+
+--- Get the source buffer and 1-indexed line number at the cursor of a window.
+--- @param win integer window handle
+--- @return integer|nil bufnr, integer|nil line 1-indexed line number
+function M.multibuf_get_origin_at_cursor(win)
+	local mb = vim.api.nvim_win_get_buf(win)
+	if not M.multibuf_is_valid(mb) then
+		return nil, nil
+	end
+	local cursor = vim.api.nvim_win_get_cursor(win)
+	local buf, line = M.multibuf_get_buf_at_line(mb, cursor[1] - 1)
+	if buf and line then
+		return buf, line + 1
 	end
 	return nil, nil
 end

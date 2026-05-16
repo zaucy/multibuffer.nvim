@@ -35,12 +35,11 @@ vim.api.nvim_create_autocmd("FileType", {
 	callback = function(args)
 		-- Navigation: <CR> to jump to source line
 		vim.keymap.set("n", "<cr>", function()
-			local mbuf = require('multibuffer')
-			local cursor = vim.api.nvim_win_get_cursor(0)
-			local buf, line = multibuffer.multibuf_get_buf_at_line(args.buf, cursor[1])
+			local api = require('multibuffer')
+			local buf, line = api.multibuf_get_origin_at_cursor(0)
 			if buf then
 				vim.api.nvim_set_current_buf(buf)
-				vim.api.nvim_win_set_cursor(0, { line, cursor[2] })
+				vim.api.nvim_win_set_cursor(0, { line, 0 })
 			end
 		end, { buffer = args.buf, desc = "Jump to source" })
 	end,
