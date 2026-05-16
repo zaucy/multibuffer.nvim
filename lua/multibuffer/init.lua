@@ -1036,9 +1036,17 @@ function M.create_multibuf(opts)
 	vim.api.nvim_buf_attach(id, false, {
 		on_lines = function(_, bufnr, _, first, last_old, last_new)
 			local b_info = multibufs[bufnr]
-			if not b_info or b_info.reloading then return end
+			if not b_info or b_info.reloading then
+				return
+			end
 
-			local extmarks = vim.api.nvim_buf_get_extmarks(bufnr, M.multibuf__ns, { first, 0 }, { last_new, -1 }, { overlap = true })
+			local extmarks = vim.api.nvim_buf_get_extmarks(
+				bufnr,
+				M.multibuf__ns,
+				{ first, 0 },
+				{ last_new, -1 },
+				{ overlap = true }
+			)
 			for _, m in ipairs(extmarks) do
 				local mark_id = m[1]
 				b_info.dirty_regions[mark_id] = true
@@ -1051,7 +1059,7 @@ function M.create_multibuf(opts)
 						if r and r[1] and r[3] and r[3].end_row then
 							local r_s = r[1]
 							local r_e = r[3].end_row
-							-- Since this is called on on_lines, it's possible the extmark end_row hasn't been updated or the user modified right inside. 
+							-- Since this is called on on_lines, it's possible the extmark end_row hasn't been updated or the user modified right inside.
 							-- Extmarks with right_gravity will adjust, but sometimes if they edit at the very end or right before, we might want to catch it.
 							-- For now we already use `overlap=true` in `nvim_buf_get_extmarks`
 							-- but let's double check any extmark where the edited region [first, last_new] overlaps [r_s, r_e]
@@ -1062,14 +1070,16 @@ function M.create_multibuf(opts)
 					end
 				end
 			end
-		end
+		end,
 	})
 
 	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
 		buffer = id,
 		callback = function(args)
 			local b_info = multibufs[args.buf]
-			if not b_info or b_info.reloading then return end
+			if not b_info or b_info.reloading then
+				return
+			end
 
 			local processed_dirty = {}
 			for mark_id, _ in pairs(b_info.dirty_regions) do
@@ -1090,42 +1100,50 @@ function M.create_multibuf(opts)
 								end
 							end
 						end
-						if found_b_idx then break end
+						if found_b_idx then
+							break
+						end
 					end
 
 					if found_b_idx and found_s_idx then
 						local b = b_info.bufs[found_b_idx]
 						local sid = b.source_extmark_ids[found_s_idx]
-						
+
 						-- if sid is nil but b.pending_regions exists, it means the buffer isn't fully loaded yet!
 						-- Let's check if there are pending regions instead of source extmark ids
 						if not sid and b.pending_regions and b.pending_regions[found_s_idx] then
 							load_source_buf(args.buf, b)
 							sid = b.source_extmark_ids[found_s_idx]
 						end
-						
-						local result_mb = vim.api.nvim_buf_get_extmark_by_id(args.buf, M.multibuf__ns, mark_id, { details = true })
+
+						local result_mb =
+							vim.api.nvim_buf_get_extmark_by_id(args.buf, M.multibuf__ns, mark_id, { details = true })
 						if result_mb and result_mb[1] then
 							local rs = result_mb[1]
 							local re = result_mb[3].end_row
-							
+
 							if sid then
 								local result_src = nil
 								if type(sid) == "number" then
-									result_src = vim.api.nvim_buf_get_extmark_by_id(b.buf, M.multibuf__ns, sid, { details = true })
+									result_src = vim.api.nvim_buf_get_extmark_by_id(
+										b.buf,
+										M.multibuf__ns,
+										sid,
+										{ details = true }
+									)
 								end
 								if result_src and result_src[1] then
 									local ss = result_src[1]
 									local se = result_src[3].end_row
-									
+
 									local new_lines = vim.api.nvim_buf_get_lines(args.buf, rs, re, false)
 									local old_lines = vim.api.nvim_buf_get_lines(b.buf, ss, se, false)
-									
+
 									local equal = true
 									if #new_lines ~= #old_lines then
 										equal = false
 									else
-										for i=1,#new_lines do
+										for i = 1, #new_lines do
 											if new_lines[i] ~= old_lines[i] then
 												equal = false
 												break
@@ -1134,15 +1152,17 @@ function M.create_multibuf(opts)
 									end
 
 									if not equal then
-										if #new_lines == 0 then new_lines = { "" } end
-										
+										if #new_lines == 0 then
+											new_lines = { "" }
+										end
+
 										b.ignore_source_changes = true
 										vim.api.nvim_buf_set_lines(b.buf, ss, se, false, new_lines)
-										
+
 										-- get the new length in case new_lines is just one empty string
 										local diff = #new_lines - (se - ss)
 										local new_se = se + diff
-										
+
 										-- The source buffer might have changed the extmark's end row if right_gravity applied.
 										-- Sometimes the extmark disappears if all text was removed and it couldn't shift properly.
 										-- So we strictly set it.
@@ -1152,7 +1172,7 @@ function M.create_multibuf(opts)
 											end_right_gravity = true,
 										})
 										b.ignore_source_changes = false
-										
+
 										-- Fix the multibuffer's own extmark if lines were added/removed
 										-- This ensures further edits before a reload still track properly
 										if diff ~= 0 then
@@ -1180,7 +1200,10 @@ function M.create_multibuf(opts)
 				local b_info = multibufs[args.buf]
 				if b_info then
 					for _, b in ipairs(b_info.bufs) do
-						if vim.api.nvim_buf_is_valid(b.buf) and vim.api.nvim_get_option_value("modified", { buf = b.buf }) then
+						if
+							vim.api.nvim_buf_is_valid(b.buf)
+							and vim.api.nvim_get_option_value("modified", { buf = b.buf })
+						then
 							vim.api.nvim_buf_call(b.buf, function()
 								local force = vim.v.cmdbang == 1
 								if force then

@@ -216,6 +216,10 @@ function M.multibuf_ripgrep(opts)
 		local process_done_searching_paths
 
 		process_done_searching_paths = vim.schedule_wrap(function(batched_searching_paths)
+			if last_proc_stdout ~= new_proc_stdout then
+				return
+			end
+
 			local add_opts = {}
 
 			for _, path in ipairs(batched_searching_paths) do
