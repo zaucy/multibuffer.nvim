@@ -11,6 +11,7 @@ local function do_location_request(method, title_verb, extra_params)
 	})
 
 	local api = require("multibuffer")
+	local lsp_util = require("multibuffer.lsp_util")
 	local mbuf = api.create_multibuf()
 
 	if #clients == 0 then
@@ -84,22 +85,35 @@ local function do_location_request(method, title_verb, extra_params)
 			return
 		end
 
-		api.multibuf_set_header(mbuf, {
-			string.format(" %s found %i location(s) ", client.name, #locations),
-		})
-
 		local grouped = {}
+		local skip_count = 0
 		for _, loc in ipairs(locations) do
 			local uri = loc.uri or loc.targetUri
-			local range = loc.range or loc.targetRange
-			if not grouped[uri] then
-				grouped[uri] = {}
+			local path = vim.uri_to_fname(uri)
+			path = lsp_util.resolve_local_path(path)
+
+			if vim.uv.fs_stat(path) then
+				local resolved_uri = vim.uri_from_fname(path)
+				local range = loc.range or loc.targetRange
+				if not grouped[resolved_uri] then
+					grouped[resolved_uri] = {}
+				end
+				table.insert(grouped[resolved_uri], {
+					start_row = range.start.line,
+					end_row = range["end"].line,
+				})
+			else
+				skip_count = skip_count + 1
 			end
-			table.insert(grouped[uri], {
-				start_row = range.start.line,
-				end_row = range["end"].line,
-			})
 		end
+
+		local header_lines = {
+			string.format(" %s found %i location(s) ", client.name, #locations),
+		}
+		if skip_count > 0 then
+			table.insert(header_lines, string.format(" (skipped %i non-existent file(s)) ", skip_count))
+		end
+		api.multibuf_set_header(mbuf, header_lines)
 
 		local adds = {}
 		for uri, regions in pairs(grouped) do
@@ -165,6 +179,8 @@ local function do_call_hierarchy(direction)
 	end
 
 	local client = clients[1]
+	local api = require("multibuffer")
+	local lsp_util = require("multibuffer.lsp_util")
 	local title_verb = direction == "incomingCalls" and "incoming calls" or "outgoing calls"
 
 	api.multibuf_set_header(mbuf, {
@@ -238,33 +254,46 @@ local function do_call_hierarchy(direction)
 				return
 			end
 
-			api.multibuf_set_header(mbuf, {
-				string.format(" %s found %i result(s) ", client.name, #call_result),
-			})
-
 			local grouped = {}
+			local skip_count = 0
 			for _, call in ipairs(call_result) do
 				local target_item = direction == "incomingCalls" and call.from or call.to
 				local uri = target_item.uri
+				local path = vim.uri_to_fname(uri)
+				path = lsp_util.resolve_local_path(path)
 
-				if not grouped[uri] then
-					grouped[uri] = {}
-				end
+				if vim.uv.fs_stat(path) then
+					local resolved_uri = vim.uri_from_fname(path)
 
-				if direction == "incomingCalls" and call.fromRanges then
-					for _, range in ipairs(call.fromRanges) do
-						table.insert(grouped[uri], {
-							start_row = range.start.line,
-							end_row = range["end"].line,
+					if not grouped[resolved_uri] then
+						grouped[resolved_uri] = {}
+					end
+
+					if direction == "incomingCalls" and call.fromRanges then
+						for _, range in ipairs(call.fromRanges) do
+							table.insert(grouped[resolved_uri], {
+								start_row = range.start.line,
+								end_row = range["end"].line,
+							})
+						end
+					else
+						table.insert(grouped[resolved_uri], {
+							start_row = target_item.range.start.line,
+							end_row = target_item.range["end"].line,
 						})
 					end
 				else
-					table.insert(grouped[uri], {
-						start_row = target_item.range.start.line,
-						end_row = target_item.range["end"].line,
-					})
+					skip_count = skip_count + 1
 				end
 			end
+
+			local header_lines = {
+				string.format(" %s found %i result(s) ", client.name, #call_result),
+			}
+			if skip_count > 0 then
+				table.insert(header_lines, string.format(" (skipped %i non-existent file(s)) ", skip_count))
+			end
+			api.multibuf_set_header(mbuf, header_lines)
 
 			local adds = {}
 			for uri, regions in pairs(grouped) do

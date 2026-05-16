@@ -56,6 +56,7 @@ function M.multibuf_document_symbols(buf)
 	})
 
 	vim.lsp.buf.document_symbol({
+		pos = nil,
 		on_list = function(t)
 			local filtered_entry = vim.tbl_filter(should_show_symbol, t.items)
 
@@ -130,6 +131,7 @@ function M.multibuf_workspace_symbols(default_query)
 	local mbuf = nil
 	local done_requests = 0
 	local found_count = 0
+	local skipped_count = 0
 
 	--- @type table<number, MultibufRegion[]>
 	local regions_by_bufnr = {}
@@ -140,51 +142,98 @@ function M.multibuf_workspace_symbols(default_query)
 	local function workspace_symbol_handler(client, err, result, context, config)
 		assert(mbuf)
 
-		if not result then
-			assert(mbuf)
-			local err_msg = "unknown"
-			if err and err.message then
-				err_msg = err.message
-			end
+		if err then
+			local err_msg = err.message or "unknown"
 			api.multibuf_set_header(mbuf, {
 				"",
 				"",
 				"",
-				string.format("ERROR: %s", err_msg),
+				string.format("ERROR from %s: %s", client.name, err_msg),
 			})
+			return
+		end
+
+		if not result then
 			return
 		end
 
 		for _, symbol in ipairs(result) do
 			local lnum = symbol.location.range.start.line
-			local symbol_bufnr = vim.uri_to_bufnr(symbol.location.uri)
+			local path = vim.uri_to_fname(symbol.location.uri)
+			local lsp_util = require("multibuffer.lsp_util")
+			path = lsp_util.resolve_local_path(path)
 
-			regions_by_bufnr[symbol_bufnr] = regions_by_bufnr[symbol_bufnr] or {}
-			table.insert(regions_by_bufnr[symbol_bufnr], { start_row = lnum, end_row = lnum })
+			if vim.uv.fs_stat(path) then
+				local symbol_bufnr = vim.fn.bufadd(path)
+				regions_by_bufnr[symbol_bufnr] = regions_by_bufnr[symbol_bufnr] or {}
+				table.insert(regions_by_bufnr[symbol_bufnr], { start_row = lnum, end_row = lnum })
+			else
+				skipped_count = skipped_count + 1
+			end
 		end
 
 		api.multibuf_clear_bufs(mbuf)
 
 		local add_buf_opts = {}
+		local cwd = vim.fn.getcwd()
+		local lsp_util = require("multibuffer.lsp_util")
 
 		for regions_buf, regions in pairs(regions_by_bufnr) do
+			table.sort(regions, function(a, b)
+				return a.start_row < b.start_row
+			end)
+
+			-- Deduplicate regions on the same line
+			local unique_regions = {}
+			if #regions > 0 then
+				table.insert(unique_regions, regions[1])
+				for i = 2, #regions do
+					if regions[i].start_row ~= regions[i - 1].start_row then
+						table.insert(unique_regions, regions[i])
+					end
+				end
+			end
+			regions = unique_regions
+
+			local original_path = vim.api.nvim_buf_get_name(regions_buf)
+			local resolved_path = lsp_util.resolve_local_path(original_path)
+
+			-- Check if the resolved path is within the logical workspace.
+			-- resolve_local_path already maps things back to junctions in CWD if possible.
+			local normalized_resolved = resolved_path:gsub("\\", "/"):lower()
+			local normalized_cwd = cwd:gsub("\\", "/"):lower()
+			local is_local = normalized_resolved:sub(1, #normalized_cwd) == normalized_cwd
+
 			table.insert(add_buf_opts, {
 				buf = regions_buf,
 				regions = regions,
+				is_local = is_local,
+				path = resolved_path,
 			})
 		end
+
+		table.sort(add_buf_opts, function(a, b)
+			if a.is_local ~= b.is_local then
+				return a.is_local
+			end
+			return a.path < b.path
+		end)
 
 		api.multibuf_add_bufs(mbuf, add_buf_opts)
 
 		found_count = found_count + #result
 
 		if done_requests == #clients then
-			api.multibuf_set_header(mbuf, {
+			local header = {
 				"",
 				"",
 				"",
 				string.format("found %i workspace symbols (duplicates merged)", found_count),
-			})
+			}
+			if skipped_count > 0 then
+				table.insert(header, string.format("(skipped %i non-existent file(s))", skipped_count))
+			end
+			api.multibuf_set_header(mbuf, header)
 		end
 	end
 
