@@ -1,109 +1,140 @@
 local M = {}
 
-local symbol_kinds = {
-	"Function",
-	"Method",
-	"Namespace",
-}
-
-local symbol_table = {
-	["Array"] = { "", "Array" },
-	["Boolean"] = { "", "@lsp.type.boolean" },
-	["Class"] = { "", "@lsp.type.class" },
-	["Constant"] = { "", "@constant" },
-	["constructor"] = { "", "@constructor" },
-	["Constructor"] = { "", "@lsp.type.enum" },
-	["EnumMember"] = { "", "@lsp.type.enumMember" },
-	["Event"] = { "", "@lsp.type.event" },
-	["Field"] = { "", "@field" },
-	["File"] = "",
-	["Function"] = { "", "@function" },
-	["Interface"] = { "", "@lsp.type.interface" },
-	["Key"] = { "", "@lsp.type.keyword" },
-	["Method"] = { "", "@method" },
-	["Module"] = { "", "@module" },
-	["Namespace"] = { "", "@namespace" },
-	["Null"] = "󰟢",
-	["Number"] = { "", "@number" },
-	["Object"] = { "" },
-	["Operator"] = { "", "@lsp.type.operator" },
-	["Package"] = { "", "@namespace" },
-	["Property"] = { "", "@property" },
-	["String"] = { "", "@string" },
-	["Struct"] = { "", "@lsp.type.struct" },
-	["TypeParameter"] = { "", "@lsp.type.typeParameter" },
-	["Variable"] = { "", "@variable" },
-}
-
-local function should_show_symbol(entry)
-	return vim.tbl_contains(symbol_kinds, entry.kind)
-end
-
-function M.multibuf_document_symbols(buf)
+function M.multibuf_document_symbols(opts)
+	opts = opts or {}
+	local buf = opts.buf or vim.api.nvim_get_current_buf()
+	local kinds = opts.kinds
 	if buf == 0 then
 		buf = vim.api.nvim_get_current_buf()
 	end
-	assert(buf ~= 0)
-	local win = vim.api.nvim_get_current_win()
+
+	local clients = vim.lsp.get_clients({
+		bufnr = buf,
+		method = "textDocument/documentSymbol",
+	})
 
 	local api = require("multibuffer")
-	local symbols_mbuf = api.create_multibuf()
+	local mbuf = api.create_multibuf()
 
-	vim.b[symbols_mbuf].multibuffer_expander_max_lines = 0
+	if #clients == 0 then
+		api.multibuf_set_header(mbuf, {
+			"no lsp clients supporting document symbols attached to buffer",
+		})
+		return
+	end
 
-	api.multibuf_set_header(symbols_mbuf, {
-		" loading document symbols ",
+	local client = clients[1]
+
+	-- Helper to recursively flatten DocumentSymbol into a list of simplified items
+	local function flatten_symbols(symbols, result)
+		result = result or {}
+		for _, s in ipairs(symbols) do
+			local lnum = s.range and s.range.start.line or (s.location and s.location.range.start.line)
+			-- SymbolInformation uses kind as an integer, DocumentSymbol uses kind as an integer too.
+			-- We need to convert it to a string name for our filtering logic.
+			local kind_name = vim.lsp.protocol.SymbolKind[s.kind] or "Unknown"
+			table.insert(result, { lnum = lnum + 1, kind = kind_name })
+			if s.children then
+				flatten_symbols(s.children, result)
+			end
+		end
+		return result
+	end
+
+	assert(buf ~= 0)
+	local win = vim.api.nvim_get_current_win()
+	-- get cursor position to set it in the multibuffer later
+	local cursor_pos = vim.api.nvim_win_get_cursor(win)
+
+	vim.b[mbuf].multibuffer_expander_max_lines = 0
+
+	api.multibuf_set_header(mbuf, {
+		string.format(" loading document symbols from %s ...", client.name),
 	})
 
-	vim.lsp.buf.document_symbol({
-		on_list = function(t)
-			local filtered_entry = vim.tbl_filter(should_show_symbol, t.items)
+	vim.api.nvim_win_set_buf(win, mbuf)
 
-			api.multibuf_set_header(symbols_mbuf, {
-				string.format(" found %i document symbols ", #filtered_entry),
+	local params = { textDocument = vim.lsp.util.make_text_document_params(buf) }
+	client:request("textDocument/documentSymbol", params, function(err, result)
+		if err then
+			api.multibuf_set_header(mbuf, {
+				string.format(" error: %s ", err.message),
 			})
+			return
+		end
 
-			local entries_by_symbol_kind = {}
+		local items = flatten_symbols(result or {})
+
+		local filtered_entry = vim.tbl_filter(function(entry)
+			if not kinds then
+				return true
+			end
+			return vim.tbl_contains(kinds, entry.kind)
+		end, items)
+
+		-- Find the closest symbol to the cursor
+		local closest_lnum = -1
+		if #filtered_entry > 0 then
+			local cursor_lnum = cursor_pos[1]
+			local best_lnum = -1
 			for _, entry in ipairs(filtered_entry) do
-				entries_by_symbol_kind[entry.kind] = entries_by_symbol_kind[entry.kind] or {}
-				table.insert(entries_by_symbol_kind[entry.kind], entry)
+				if entry.lnum <= cursor_lnum and entry.lnum > best_lnum then
+					best_lnum = entry.lnum
+				end
 			end
+			closest_lnum = best_lnum
+			-- if no symbol is found, default to the first symbol
+			if closest_lnum == -1 then
+				table.sort(filtered_entry, function(a, b)
+					return a.lnum < b.lnum
+				end)
+				closest_lnum = filtered_entry[1].lnum
+			end
+		end
 
-			local add_opts = {}
+		api.multibuf_set_header(mbuf, {
+			string.format(" found %i document symbols ", #filtered_entry),
+		})
 
-			for kind, entries in pairs(entries_by_symbol_kind) do
-				--- @param entry vim.quickfix.entry
-				local symbol_lines = vim.tbl_map(function(entry)
-					return entry.lnum - 1
-				end, entries)
+		local add_opts = {}
 
-				vim.fn.sort(symbol_lines)
-				vim.list.unique(symbol_lines)
+		if #filtered_entry > 0 then
+			local symbol_lines = vim.tbl_map(function(entry)
+				return entry.lnum - 1
+			end, filtered_entry)
 
-				table.insert(add_opts, {
-					buf = buf,
-					title = {
-						{},
-						{
-							{ " " },
-							symbol_table[kind],
-							{ " " },
-							{ kind },
-							{ string.format(" (%i) ", #entries) },
-						},
-						{},
+			vim.fn.sort(symbol_lines)
+			vim.list.unique(symbol_lines)
+
+			table.insert(add_opts, {
+				buf = buf,
+				title = {
+					{},
+					{
+						{ " " },
+						{ "" },
+						{ " " },
+						{ "Document Symbols" },
+						{ string.format(" (%i) ", #filtered_entry) },
 					},
-					regions = vim.tbl_map(function(lnum)
-						return { start_row = lnum, end_row = lnum }
-					end, symbol_lines),
-				})
+					{},
+				},
+				regions = vim.tbl_map(function(lnum)
+					return { start_row = lnum, end_row = lnum }
+				end, symbol_lines),
+			})
+		end
+
+		api.multibuf_add_bufs(mbuf, add_opts)
+
+		-- Set the cursor to the closest symbol
+		if closest_lnum > 0 then
+			local target_mb_line = api.multibuf_buf_get_line(mbuf, buf, closest_lnum - 1)
+			if target_mb_line then
+				vim.api.nvim_win_set_cursor(win, { target_mb_line + 1, 0 })
 			end
-
-			api.multibuf_add_bufs(symbols_mbuf, add_opts)
-		end,
-	})
-
-	vim.api.nvim_win_set_buf(win, symbols_mbuf)
+		end
+	end, buf)
 end
 
 function M.multibuf_workspace_symbols(default_query)
@@ -130,6 +161,7 @@ function M.multibuf_workspace_symbols(default_query)
 	local mbuf = nil
 	local done_requests = 0
 	local found_count = 0
+	local skipped_count = 0
 
 	--- @type table<number, MultibufRegion[]>
 	local regions_by_bufnr = {}
@@ -140,51 +172,98 @@ function M.multibuf_workspace_symbols(default_query)
 	local function workspace_symbol_handler(client, err, result, context, config)
 		assert(mbuf)
 
-		if not result then
-			assert(mbuf)
-			local err_msg = "unknown"
-			if err and err.message then
-				err_msg = err.message
-			end
+		if err then
+			local err_msg = err.message or "unknown"
 			api.multibuf_set_header(mbuf, {
 				"",
 				"",
 				"",
-				string.format("ERROR: %s", err_msg),
+				string.format("ERROR from %s: %s", client.name, err_msg),
 			})
+			return
+		end
+
+		if not result then
 			return
 		end
 
 		for _, symbol in ipairs(result) do
 			local lnum = symbol.location.range.start.line
-			local symbol_bufnr = vim.uri_to_bufnr(symbol.location.uri)
+			local path = vim.uri_to_fname(symbol.location.uri)
+			local lsp_util = require("multibuffer.lsp_util")
+			path = lsp_util.resolve_local_path(path)
 
-			regions_by_bufnr[symbol_bufnr] = regions_by_bufnr[symbol_bufnr] or {}
-			table.insert(regions_by_bufnr[symbol_bufnr], { start_row = lnum, end_row = lnum })
+			if vim.uv.fs_stat(path) then
+				local symbol_bufnr = vim.fn.bufadd(path)
+				regions_by_bufnr[symbol_bufnr] = regions_by_bufnr[symbol_bufnr] or {}
+				table.insert(regions_by_bufnr[symbol_bufnr], { start_row = lnum, end_row = lnum })
+			else
+				skipped_count = skipped_count + 1
+			end
 		end
 
 		api.multibuf_clear_bufs(mbuf)
 
 		local add_buf_opts = {}
+		local cwd = vim.fn.getcwd()
+		local lsp_util = require("multibuffer.lsp_util")
 
 		for regions_buf, regions in pairs(regions_by_bufnr) do
+			table.sort(regions, function(a, b)
+				return a.start_row < b.start_row
+			end)
+
+			-- Deduplicate regions on the same line
+			local unique_regions = {}
+			if #regions > 0 then
+				table.insert(unique_regions, regions[1])
+				for i = 2, #regions do
+					if regions[i].start_row ~= regions[i - 1].start_row then
+						table.insert(unique_regions, regions[i])
+					end
+				end
+			end
+			regions = unique_regions
+
+			local original_path = vim.api.nvim_buf_get_name(regions_buf)
+			local resolved_path = lsp_util.resolve_local_path(original_path)
+
+			-- Check if the resolved path is within the logical workspace.
+			-- resolve_local_path already maps things back to junctions in CWD if possible.
+			local normalized_resolved = resolved_path:gsub("\\", "/"):lower()
+			local normalized_cwd = cwd:gsub("\\", "/"):lower()
+			local is_local = normalized_resolved:sub(1, #normalized_cwd) == normalized_cwd
+
 			table.insert(add_buf_opts, {
 				buf = regions_buf,
 				regions = regions,
+				is_local = is_local,
+				path = resolved_path,
 			})
 		end
+
+		table.sort(add_buf_opts, function(a, b)
+			if a.is_local ~= b.is_local then
+				return a.is_local
+			end
+			return a.path < b.path
+		end)
 
 		api.multibuf_add_bufs(mbuf, add_buf_opts)
 
 		found_count = found_count + #result
 
 		if done_requests == #clients then
-			api.multibuf_set_header(mbuf, {
+			local header = {
 				"",
 				"",
 				"",
 				string.format("found %i workspace symbols (duplicates merged)", found_count),
-			})
+			}
+			if skipped_count > 0 then
+				table.insert(header, string.format("(skipped %i non-existent file(s))", skipped_count))
+			end
+			api.multibuf_set_header(mbuf, header)
 		end
 	end
 
