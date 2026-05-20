@@ -19,10 +19,13 @@
 --- @field loading boolean? Whether this buffer is currently being loaded/processed
 --- @field title any[]|nil|MultibufTitleRenderFunction
 --- @field id string|nil
+--- @field ignore_source_changes boolean?
 
 --- @class MultibufInfo
 --- @field bufs MultibufBufInfo[] Info about included buffers
 --- @field header string[]? Custom header lines
+--- @field reloading boolean?
+--- @field dirty_regions table<integer, boolean>?
 
 --- @class MultibufBufListener
 --- @field multibufs integer[] List of multibuffers listening to this source
@@ -108,6 +111,7 @@ local M = {
 	multibuf__ns = nil,
 	--- @type integer Namespace for live highlight projection
 	multibuf_hl_ns = nil,
+	multibufs = multibufs,
 }
 
 --- @param args table
@@ -115,7 +119,19 @@ local function multibuf_buf_changed(args)
 	local listener_info = buf_listeners[args.buf]
 	if listener_info then
 		for _, multibuf in ipairs(listener_info.multibufs) do
-			M.multibuf_reload(multibuf)
+			local info = multibufs[multibuf]
+			if info then
+				local ignore = false
+				for _, b in ipairs(info.bufs) do
+					if b.buf == args.buf and (b.ignore_source_changes or info.reloading) then
+						ignore = true
+						break
+					end
+				end
+				if not ignore then
+					M.multibuf_reload(multibuf)
+				end
+			end
 		end
 	end
 end
@@ -589,6 +605,10 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 	if not info then
 		return
 	end
+	if info.reloading then
+		return
+	end
+	info.reloading = true
 	local win = get_buf_win(multibuf)
 	local sc_width = get_signcolumn_width(win)
 	local cursor_pos = win and vim.api.nvim_win_get_cursor(win)
@@ -642,9 +662,7 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 	end
 	table.insert(virt_expand_lnums, #all_lines)
 
-	vim.api.nvim_set_option_value("modifiable", true, { buf = multibuf })
 	vim.api.nvim_buf_set_lines(multibuf, 0, -1, true, all_lines)
-	vim.api.nvim_set_option_value("modifiable", false, { buf = multibuf })
 
 	-- 2. Render Structure (Titles, Signs, Expanders)
 	local current_lnum = #header
@@ -763,7 +781,10 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 				buf_info.region_extmark_ids[s_idx] =
 					vim.api.nvim_buf_set_extmark(multibuf, M.multibuf__ns, current_lnum, 0, {
 						end_row = current_lnum + slice_len,
+						end_col = 0,
+						right_gravity = false,
 						end_right_gravity = true,
+						invalidate = false,
 					})
 
 				current_lnum, last_s_end, virt_expand_idx = current_lnum + slice_len, s_end, virt_expand_idx + 1
@@ -787,6 +808,7 @@ function M.multibuf_reload(multibuf, force_source_buf, force_source_line)
 			vim.api.nvim_win_set_cursor(win, { target_line, cursor_pos[2] })
 		end
 	end
+	info.reloading = false
 end
 
 --- @param opts MultibufSetupOptions
@@ -997,6 +1019,81 @@ function M.setup(opts)
 	})
 end
 
+--- Synchronize dirty sections of the multibuffer back to the source buffers.
+--- @param bufnr integer
+function M.multibuf_sync(bufnr)
+	local b_info = multibufs[bufnr]
+	if not b_info or b_info.reloading then
+		return
+	end
+
+	if b_info.sync_timer then
+		b_info.sync_timer:stop()
+	end
+
+	local processed_dirty = b_info.dirty_regions or {}
+	b_info.dirty_regions = {}
+
+	for mark_id, _ in pairs(processed_dirty) do
+		local found_b_idx, found_s_idx
+		for b_idx, b in ipairs(b_info.bufs) do
+			if b.region_extmark_ids then
+				for s_idx, rid in ipairs(b.region_extmark_ids) do
+					if rid == mark_id then
+						found_b_idx, found_s_idx = b_idx, s_idx
+						break
+					end
+				end
+			end
+			if found_b_idx then break end
+		end
+
+		if found_b_idx and found_s_idx then
+			local b = b_info.bufs[found_b_idx]
+			if b.ignore_source_changes then
+				goto next_mark
+			end
+
+			local sid = b.source_extmark_ids[found_s_idx]
+			if not sid and b.pending_regions and b.pending_regions[found_s_idx] then
+				load_source_buf(bufnr, b)
+				sid = b.source_extmark_ids[found_s_idx]
+			end
+
+			if sid then
+				local rs, re = get_extmark_range(bufnr, mark_id)
+				local ss, se = get_extmark_range(b.buf, sid)
+				if rs and ss then
+					local new_lines = vim.api.nvim_buf_get_lines(bufnr, rs, re, false)
+					local old_lines = vim.api.nvim_buf_get_lines(b.buf, ss, se, false)
+
+					local changed = #new_lines ~= #old_lines
+					if not changed then
+						for i = 1, #new_lines do
+							if new_lines[i] ~= old_lines[i] then
+								changed = true; break
+							end
+						end
+					end
+
+					if changed then
+						b.ignore_source_changes = true
+						vim.api.nvim_buf_set_lines(b.buf, ss, se, false, #new_lines == 0 and {""} or new_lines)
+						local diff = #new_lines - (se - ss)
+						vim.api.nvim_buf_set_extmark(b.buf, M.multibuf__ns, ss, 0, {
+							id = sid,
+							end_row = se + diff,
+							end_right_gravity = true,
+						})
+						b.ignore_source_changes = false
+					end
+				end
+			end
+		end
+		::next_mark::
+	end
+end
+
 --- @class CreateMultibufOptions
 --- @field header string[]|nil
 
@@ -1008,17 +1105,103 @@ function M.create_multibuf(opts)
 
 	local id = vim.api.nvim_create_buf(true, true)
 	local header = opts.header or create_multibuf_header()
-	local info = { bufs = {}, header = header }
+	local info = { bufs = {}, header = header, reloading = false, dirty_regions = {} }
 	vim.api.nvim_set_option_value("buftype", "acwrite", { buf = id })
 	vim.api.nvim_set_option_value("filetype", "multibuffer", { buf = id })
-	vim.api.nvim_set_option_value("modifiable", false, { buf = id })
+	vim.api.nvim_set_option_value("modifiable", true, { buf = id })
+	pcall(vim.api.nvim_buf_set_name, id, "multibuffer://" .. id)
+	-- Ensure buftype stays acwrite even if filetype autocommands override it
+	vim.api.nvim_set_option_value("buftype", "acwrite", { buf = id })
 	multibufs[id] = info
+
+	vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter" }, {
+		buffer = id,
+		callback = function()
+			vim.api.nvim_set_option_value("buftype", "acwrite", { buf = id })
+		end,
+	})
+
+	vim.api.nvim_buf_attach(id, false, {
+		on_lines = function(_, bufnr, _, first, last_old, last_new)
+			local b_info = multibufs[bufnr]
+			if not b_info or b_info.reloading then
+				return
+			end
+
+			-- Use a lighter overlap check
+			local extmarks = vim.api.nvim_buf_get_extmarks(
+				bufnr,
+				M.multibuf__ns,
+				{ first, 0 },
+				{ last_new, -1 },
+				{ overlap = true }
+			)
+			for _, m in ipairs(extmarks) do
+				b_info.dirty_regions[m[1]] = true
+			end
+
+			if b_info.sync_timer then
+				b_info.sync_timer:stop()
+			else
+				b_info.sync_timer = vim.uv.new_timer()
+			end
+			b_info.sync_timer:start(20, 0, vim.schedule_wrap(function()
+				if not M.multibuf_is_valid(id) then return end
+				vim.api.nvim_exec_autocmds("User", { pattern = "MultibufSync", data = { buf = id } })
+			end))
+		end,
+		on_detach = function()
+			local b_info = multibufs[id]
+			if b_info and b_info.sync_timer then
+				b_info.sync_timer:stop()
+				b_info.sync_timer:close()
+				b_info.sync_timer = nil
+			end
+		end
+	})
+
+	vim.api.nvim_create_autocmd("User", {
+		pattern = "MultibufSync",
+		callback = function(args)
+			M.multibuf_sync(args.data.buf)
+		end
+	})
 
 	vim.api.nvim_create_autocmd({ "BufReadCmd", "BufWriteCmd" }, {
 		buffer = id,
 		callback = function(args)
-			pcall(vim.treesitter.stop, args.buf)
-			M.multibuf_reload(args.buf)
+			if args.event == "BufWriteCmd" then
+				M.multibuf_sync(args.buf)
+				local b_info = multibufs[args.buf]
+				local success = true
+				if b_info then
+					for _, b in ipairs(b_info.bufs) do
+						if
+							vim.api.nvim_buf_is_valid(b.buf)
+							and vim.api.nvim_get_option_value("modified", { buf = b.buf })
+						then
+							local ok, err = pcall(vim.api.nvim_buf_call, b.buf, function()
+								local force = vim.v.cmdbang == 1
+								if force then
+									vim.cmd("write!")
+								else
+									vim.cmd("write")
+								end
+							end)
+							if not ok then
+								success = false
+								vim.notify("Failed to write buffer " .. vim.api.nvim_buf_get_name(b.buf) .. ": " .. tostring(err), vim.log.levels.ERROR)
+							end
+						end
+					end
+				end
+				if success then
+					vim.api.nvim_set_option_value("modified", false, { buf = args.buf })
+				end
+			else
+				pcall(vim.treesitter.stop, args.buf)
+				M.multibuf_reload(args.buf)
+			end
 		end,
 	})
 	vim.api.nvim_create_autocmd("BufWipeout", {
@@ -1107,6 +1290,22 @@ function M.multibuf_is_loading(mb)
 	end
 	return false
 end
+
+--- Force load all pending buffers in a multibuffer.
+--- @param mb integer
+function M.multibuf_load_all(mb)
+	local info = multibufs[mb]
+	if not info then
+		return
+	end
+	for _, b_info in ipairs(info.bufs) do
+		if b_info.pending_regions then
+			load_source_buf(mb, b_info)
+		end
+	end
+	M.multibuf_reload(mb)
+end
+
 
 --- @param buf integer
 function M.multibuf__wipeout(buf)
